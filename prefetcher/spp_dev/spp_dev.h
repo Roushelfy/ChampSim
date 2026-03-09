@@ -39,8 +39,10 @@ struct spp_dev : public champsim::modules::prefetcher {
   constexpr static unsigned REMAINDER_BIT = 6;
   constexpr static unsigned HASH_BIT = (QUOTIENT_BIT + REMAINDER_BIT + 1);
   constexpr static std::size_t FILTER_SET = (1 << QUOTIENT_BIT);
-  constexpr static uint32_t FILL_THRESHOLD = 90;
-  constexpr static uint32_t PF_THRESHOLD = 25;
+  // Runtime-adjustable thresholds (FDP controller modifies these per epoch).
+  // Non-static: each spp_dev instance owns its own copy (one per L2C cache object).
+  uint32_t fill_threshold = 90;
+  uint32_t pf_threshold   = 25;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -114,7 +116,8 @@ struct spp_dev : public champsim::modules::prefetcher {
 
     void update_pattern(uint32_t last_sig, typename offset_type::difference_type curr_delta);
     void read_pattern(uint32_t curr_sig, std::vector<typename offset_type::difference_type>& prefetch_delta, std::vector<uint32_t>& confidence_q,
-                      uint32_t& lookahead_way, uint32_t& lookahead_conf, uint32_t& pf_q_tail, uint32_t& depth);
+                      uint32_t& lookahead_way, uint32_t& lookahead_conf, uint32_t& pf_q_tail, uint32_t& depth,
+                      uint32_t pf_thresh); // pf_thresh passed by value to avoid _parent ambiguity
   };
 
   class PREFETCH_FILTER
@@ -174,6 +177,44 @@ struct spp_dev : public champsim::modules::prefetcher {
   PATTERN_TABLE PT;
   PREFETCH_FILTER FILTER;
   GLOBAL_REGISTER GHR;
+
+  // ── BWC (Bandwidth-Aware Controller) ───────────────────────────────────────
+  // All fields are non-static instance members → one copy per spp_dev object
+  // → one per L2C cache → zero shared state across cores in multicore builds.
+  static constexpr uint64_t FDP_EPOCH_SIZE = 500; // demand accesses triggering SPP per epoch
+                                                   // NOTE: prefetcher_cache_operate is called only for
+                                                   // demand LOADs (not SPP's own fills). bzip2 5M sim
+                                                   // generates ~1875 such calls → ~3 epochs at 500.
+  static constexpr double   FDP_ACC_HIGH   = 0.80;
+  static constexpr double   FDP_ACC_LOW    = 0.50;
+
+  // BWC sensor thresholds (queue-pressure signals)
+  static constexpr double BWC_THROTTLE_LLC_RQ = 0.80; // throttle if L2C→LLC channel RQ util > this
+  static constexpr double BWC_THROTTLE_MSHR   = 0.85; // throttle if L2C MSHR util > this
+  static constexpr double BWC_ACCEL_LLC_RQ    = 0.30; // may accelerate only if LLC RQ util < this
+  static constexpr double BWC_ACCEL_MSHR      = 0.50; // may accelerate only if MSHR util < this
+
+  uint64_t fdp_access_count    = 0; // L2C accesses since last epoch reset
+  uint64_t fdp_epoch_pf_issued = 0; // all prefetches issued this epoch (LLC + L2C)
+  uint64_t fdp_epoch_pf_useful = 0; // demand hits on prefetched lines this epoch
+  int      fdp_level           = 3; // aggressiveness level [1,5]; 3 = SPP defaults
+
+  // Lookup tables indexed by fdp_level (1-based; index 0 is unused padding)
+  static constexpr uint32_t FDP_PF_THRESH[6]    = {0, 80, 60, 25, 15,  5};
+  static constexpr uint32_t FDP_FILL_THRESH[6]  = {0, 90, 90, 90, 75, 50};
+  // Rate-limiter period: issue every N-th candidate (1 = no limit, 2 = 50%, 4 = 25%)
+  static constexpr uint32_t BWC_ISSUE_PERIOD[6] = {0,  4,  2,  1,  1,  1};
+
+  // Runtime rate-limiter state (non-static: per-instance)
+  uint32_t bwc_issue_period = 1; // updated each epoch by bwc_update_epoch()
+  uint32_t bwc_drop_counter = 0; // persistent modular counter; not reset between epochs
+
+  [[nodiscard]] bool bwc_should_issue();
+  void bwc_update_epoch();
+
+  // Set to false and rebuild to produce a baseline binary (BWC instrumented but frozen at level 3)
+  static constexpr bool BWC_ENABLED = true;
+  // ────────────────────────────────────────────────────────────────────────────
 };
 
 #endif

@@ -32,6 +32,16 @@ void spp_dev::prefetcher_cycle_operate() {}
 uint32_t spp_dev::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,
                                            uint32_t metadata_in)
 {
+  // ── FDP: epoch trigger ────────────────────────────────────────────────────
+  ++fdp_access_count;
+  if (fdp_access_count >= FDP_EPOCH_SIZE) {
+    fdp_update_epoch();
+    fdp_access_count    = 0;
+    fdp_epoch_pf_issued = 0;
+    fdp_epoch_pf_useful = 0;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   champsim::page_number page{addr};
   uint32_t last_sig = 0, curr_sig = 0, depth = 0;
   std::vector<uint32_t> confidence_q(intern_->MSHR_SIZE);
@@ -70,19 +80,21 @@ uint32_t spp_dev::prefetcher_cache_operate(champsim::address addr, champsim::add
 
   do {
     uint32_t lookahead_way = PT_WAY;
-    PT.read_pattern(curr_sig, delta_q, confidence_q, lookahead_way, lookahead_conf, pf_q_tail, depth);
+    PT.read_pattern(curr_sig, delta_q, confidence_q, lookahead_way, lookahead_conf, pf_q_tail, depth, pf_threshold);
 
     do_lookahead = 0;
     for (uint32_t i = pf_q_head; i < pf_q_tail; i++) {
-      if (confidence_q[i] >= PF_THRESHOLD) {
+      if (confidence_q[i] >= pf_threshold) {
         champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
-          if (FILTER.check(pf_addr, ((confidence_q[i] >= FILL_THRESHOLD) ? spp_dev::SPP_L2C_PREFETCH : spp_dev::SPP_LLC_PREFETCH))) {
-            prefetch_line(pf_addr, (confidence_q[i] >= FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+          if (FILTER.check(pf_addr, ((confidence_q[i] >= fill_threshold) ? spp_dev::SPP_L2C_PREFETCH : spp_dev::SPP_LLC_PREFETCH))) {
+            prefetch_line(pf_addr, (confidence_q[i] >= fill_threshold), 0); // Use addr (not base_addr) to obey the same physical page boundary
 
-            if (confidence_q[i] >= FILL_THRESHOLD) {
-              GHR.pf_issued++;
+            ++fdp_epoch_pf_issued; // FDP: count ALL issued prefetches (LLC + L2C) for accuracy tracking
+
+            if (confidence_q[i] >= fill_threshold) {
+              GHR.pf_issued++; // GHR only counts L2C fills (unchanged; used for global_accuracy)
               if (GHR.pf_issued > GLOBAL_COUNTER_MAX) {
                 GHR.pf_issued >>= 1;
                 GHR.pf_useful >>= 1;
@@ -146,7 +158,44 @@ uint32_t spp_dev::prefetcher_cache_fill(champsim::address addr, long set, long w
   return metadata_in;
 }
 
-void spp_dev::prefetcher_final_stats() {}
+void spp_dev::prefetcher_final_stats()
+{
+  std::cout << "[FDP] Final level=" << fdp_level
+            << " pf_threshold=" << pf_threshold
+            << " fill_threshold=" << fill_threshold << std::endl;
+}
+
+void spp_dev::fdp_update_epoch()
+{
+  if constexpr (!FDP_ENABLED) return; // compile-out for baseline binary
+
+  // If no prefetches were issued this epoch, hold the current level.
+  // Treating zero-issue as "perfect" would falsely upgrade aggressiveness.
+  if (fdp_epoch_pf_issued == 0)
+    return;
+
+  const double accuracy = static_cast<double>(fdp_epoch_pf_useful) / static_cast<double>(fdp_epoch_pf_issued);
+
+  if (accuracy > FDP_ACC_HIGH) {
+    if (fdp_level < 5) ++fdp_level;
+  } else if (accuracy < FDP_ACC_LOW) {
+    if (fdp_level > 1) --fdp_level;
+  }
+  // else: accuracy in [ACC_LOW, ACC_HIGH] → hold current level
+
+  // Apply updated thresholds from FDP lookup tables
+  pf_threshold   = FDP_PF_THRESH[fdp_level];
+  fill_threshold = FDP_FILL_THRESH[fdp_level];
+
+  if constexpr (SPP_DEBUG_PRINT) {
+    std::cout << "[FDP] epoch: issued=" << fdp_epoch_pf_issued
+              << " useful=" << fdp_epoch_pf_useful
+              << " acc=" << accuracy
+              << " level=" << fdp_level
+              << " pf_t=" << pf_threshold
+              << " fill_t=" << fill_threshold << "\n";
+  }
+}
 
 // TODO: Find a good 64-bit hash function
 uint64_t spp_dev::get_hash(uint64_t key)
@@ -349,7 +398,8 @@ void spp_dev::PATTERN_TABLE::update_pattern(uint32_t last_sig, typename offset_t
 }
 
 void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typename offset_type::difference_type>& delta_q, std::vector<uint32_t>& confidence_q,
-                                          uint32_t& lookahead_way, uint32_t& lookahead_conf, uint32_t& pf_q_tail, uint32_t& depth)
+                                          uint32_t& lookahead_way, uint32_t& lookahead_conf, uint32_t& pf_q_tail, uint32_t& depth,
+                                          uint32_t pf_thresh)
 {
   // Update (sig, delta) correlation
   uint32_t set = get_hash(curr_sig) % PT_SET, local_conf = 0, pf_conf = 0, max_conf = 0;
@@ -359,7 +409,7 @@ void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typenam
       local_conf = (100 * c_delta[set][way]) / c_sig[set];
       pf_conf = depth ? (_parent->GHR.global_accuracy * c_delta[set][way] / c_sig[set] * lookahead_conf / 100) : local_conf;
 
-      if (pf_conf >= PF_THRESHOLD) {
+      if (pf_conf >= pf_thresh) {
         confidence_q[pf_q_tail] = pf_conf;
         delta_q[pf_q_tail] = delta[set][way];
 
@@ -386,7 +436,7 @@ void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typenam
     pf_q_tail++;
 
     lookahead_conf = max_conf;
-    if (lookahead_conf >= PF_THRESHOLD)
+    if (lookahead_conf >= pf_thresh)
       depth++;
 
     if constexpr (SPP_DEBUG_PRINT) {
@@ -458,8 +508,10 @@ bool spp_dev::PREFETCH_FILTER::check(champsim::address check_addr, FILTER_REQUES
   case spp_dev::L2C_DEMAND:
     if ((remainder_tag[quotient] == remainder) && (useful[quotient] == 0)) {
       useful[quotient] = 1;
-      if (valid[quotient])
+      if (valid[quotient]) {
         _parent->GHR.pf_useful++; // This cache line was prefetched by SPP and actually used in the program
+        ++_parent->fdp_epoch_pf_useful; // FDP epoch counter: tracks useful prefetches this epoch
+      }
 
       if constexpr (SPP_DEBUG_PRINT) {
         std::cout << "[FILTER] " << __func__ << " set useful for check_addr: " << check_addr << " cache_line: " << cache_line;
