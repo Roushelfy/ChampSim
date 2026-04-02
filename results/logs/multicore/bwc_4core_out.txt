@@ -1,0 +1,1 @@
+/bin/bash: line 9: ./ChampSim/bin/champsim_bwc_4core: No such file or directory

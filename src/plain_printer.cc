@@ -56,6 +56,11 @@ std::vector<std::string> champsim::plain_printer::format(O3_CPU::stats_type stat
                               ::print_ratio(std::kilo::num * total_mispredictions, stats.instrs()),
                               ::print_ratio(stats.total_rob_occupancy_at_branch_mispredict, total_mispredictions)));
 
+  auto demand_stall_pct = (stats.cycles() > 0)
+                              ? fmt::format("{:.4g}", 100.0 * std::ceil(stats.demand_stall_cycles) / std::ceil(stats.cycles()))
+                              : std::string{"-"};
+  lines.push_back(fmt::format("{} Demand Stall Cycles: {} ({}% of cycles)", stats.name, stats.demand_stall_cycles, demand_stall_pct));
+
   lines.emplace_back("Branch type MPKI");
   for (auto idx : types) {
     lines.push_back(fmt::format("{}: {}", branch_type_names.at(champsim::to_underlying(idx)),
@@ -118,6 +123,12 @@ std::vector<std::string> champsim::plain_printer::format(CACHE::stats_type stats
 
     lines.push_back(fmt::format("cpu{}->{} PREFETCH REQUESTED: {:10} ISSUED: {:10} USEFUL: {:10} USELESS: {:10}", cpu, stats.name, stats.pf_requested,
                                 stats.pf_issued, stats.pf_useful, stats.pf_useless));
+
+    auto upper_rq_capacity_pct = (stats.upper_rq_capacity_sum > 0)
+                     ? fmt::format("{:.4g}", 100.0 * std::ceil(stats.upper_rq_occupancy_sum) / std::ceil(stats.upper_rq_capacity_sum))
+                     : std::string{"-"};
+    lines.push_back(fmt::format("cpu{}->{} AVERAGE UPPER RQ OCCUPANCY: {} entries ({}% of capacity)", cpu, stats.name,
+                  ::print_ratio(stats.upper_rq_occupancy_sum, stats.upper_rq_samples), upper_rq_capacity_pct));
 
     uint64_t total_downstream_demands = total_mshr_return - stats.mshr_return.value_or(std::pair{access_type::PREFETCH, cpu}, mshr_return_value_type{});
     lines.push_back(

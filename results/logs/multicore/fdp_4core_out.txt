@@ -1,0 +1,1 @@
+/bin/bash: line 8: ./ChampSim/bin/champsim_fdp_4core: No such file or directory

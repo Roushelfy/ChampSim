@@ -18,6 +18,11 @@ struct cache_stats {
   uint64_t pf_useless = 0;
   uint64_t pf_fill = 0;
 
+  // Queue-pressure telemetry sampled each cache operate() call.
+  uint64_t upper_rq_occupancy_sum = 0;
+  uint64_t upper_rq_capacity_sum = 0;
+  uint64_t upper_rq_samples = 0;
+
   champsim::stats::event_counter<std::pair<access_type, std::remove_cv_t<decltype(NUM_CPUS)>>> hits = {};
   champsim::stats::event_counter<std::pair<access_type, std::remove_cv_t<decltype(NUM_CPUS)>>> misses = {};
   champsim::stats::event_counter<std::pair<access_type, std::remove_cv_t<decltype(NUM_CPUS)>>> mshr_merge = {};

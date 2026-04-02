@@ -36,6 +36,7 @@ void to_json(nlohmann::json& j, const O3_CPU::stats_type& stats)
   j = nlohmann::json{{"instructions", stats.instrs()},
                      {"cycles", stats.cycles()},
                      {"Avg ROB occupancy at mispredict", std::ceil(stats.total_rob_occupancy_at_branch_mispredict) / std::ceil(total_mispredictions)},
+                     {"demand stall cycles", stats.demand_stall_cycles},
                      {"mispredict", mpki}};
 }
 
@@ -51,6 +52,10 @@ void to_json(nlohmann::json& j, const CACHE::stats_type& stats)
   statsmap.emplace("prefetch issued", stats.pf_issued);
   statsmap.emplace("useful prefetch", stats.pf_useful);
   statsmap.emplace("useless prefetch", stats.pf_useless);
+  statsmap.emplace("average upper RQ occupancy",
+                   (stats.upper_rq_samples > 0) ? (std::ceil(stats.upper_rq_occupancy_sum) / std::ceil(stats.upper_rq_samples)) : 0.0);
+  statsmap.emplace("average upper RQ occupancy fraction",
+                   (stats.upper_rq_capacity_sum > 0) ? (std::ceil(stats.upper_rq_occupancy_sum) / std::ceil(stats.upper_rq_capacity_sum)) : 0.0);
 
   uint64_t total_downstream_demands = stats.mshr_return.total();
   for (std::size_t cpu = 0; cpu < NUM_CPUS; ++cpu)

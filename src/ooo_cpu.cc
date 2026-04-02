@@ -36,6 +36,10 @@ constexpr long long STAT_PRINTING_PERIOD = 10000000;
 
 long O3_CPU::operate()
 {
+  if (!std::empty(ROB) && !ROB.front().completed && ROB.front().num_mem_ops() > 0) {
+    ++sim_stats.demand_stall_cycles;
+  }
+
   long progress{0};
   progress += retire_rob();                    // retire
   progress += complete_inflight_instruction(); // finalize execution
