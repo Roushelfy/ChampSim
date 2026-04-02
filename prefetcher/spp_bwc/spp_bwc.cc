@@ -187,7 +187,9 @@ void spp_bwc::bwc_update_epoch()
   const double accuracy = static_cast<double>(fdp_epoch_pf_useful) /
                           static_cast<double>(fdp_epoch_pf_issued);
 
-  if (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR) {
+  if (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR
+      || accuracy < BWC_ACC_LOW_THROTTLE) {
+    // Throttle: queue pressure too high OR accuracy near-zero (e.g. pointer-chasing)
     if (fdp_level > 1) --fdp_level;
   } else if (llc_rq_util < BWC_ACCEL_LLC_RQ && mshr_util < BWC_ACCEL_MSHR
              && accuracy > FDP_ACC_HIGH) {

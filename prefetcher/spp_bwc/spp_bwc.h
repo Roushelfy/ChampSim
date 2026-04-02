@@ -189,6 +189,8 @@ struct spp_bwc : public champsim::modules::prefetcher {
   static constexpr double BWC_THROTTLE_MSHR   = 0.85;
   static constexpr double BWC_ACCEL_LLC_RQ    = 0.30;
   static constexpr double BWC_ACCEL_MSHR      = 0.50;
+  // Accuracy-based fallback: throttle if accuracy is near-zero (catches pointer-chasing)
+  static constexpr double BWC_ACC_LOW_THROTTLE = 0.01; // < 1% useful → throttle regardless of queue pressure
 
   uint64_t fdp_access_count    = 0;
   uint64_t fdp_epoch_pf_issued = 0;
