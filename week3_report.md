@@ -34,7 +34,43 @@ All experiments were conducted on the **ChampSim** cycle-accurate microarchitect
 
 FDP operates on a single signal—per-epoch prefetch accuracy—and adjusts `pf_threshold` across five discrete levels. BWC extends this with a *hybrid* sensor: queue-pressure monitors on the shared LLC read queue and the L2C MSHR augment the accuracy signal, enabling BWC to throttle under bandwidth stress independent of accuracy. Crucially, BWC's accuracy fallback threshold is set at 1% (versus FDP's 50%), making it far more tolerant of streaming workloads with inherently low hit rates.
 
-### 1.3 Workloads
+### 1.3 BWC Implementation
+
+BWC is implemented as a **thin control layer around the unmodified SPP prediction pipeline**, rather than as a new prefetcher from scratch. The underlying SPP components—Signature Table (ST), Pattern Table (PT), Prefetch Filter, and Global History Register (GHR)—remain intact. BWC changes only the *control policy* that determines how aggressively SPP is allowed to issue prefetches in each epoch.
+
+The implementation has four key elements:
+
+1. **Per-L2C independent controller state.** Each core's L2C owns its own BWC instance and therefore maintains separate epoch counters, throttle level, and issue-period state. This is important in multi-core runs: one core can be throttled while another remains unthrottled.
+
+2. **Three-signal sensor.** At the end of each epoch, BWC samples:
+   - **Prefetch accuracy** = `useful / issued` over the current epoch
+   - **L2C MSHR utilization** from `intern_->get_mshr_occupancy_ratio()`
+   - **Shared LLC read-queue utilization** from `intern_->lower_level->rq_occupancy() / rq_size()`
+
+   The accuracy signal acts as a near-zero-value fallback: if accuracy falls below **1%**, BWC throttles even if queue pressure is low. This is intended to catch workloads like `mcf`, where prefetches consume bandwidth but rarely help architecturally. The queue-pressure signals, by contrast, are designed to detect bandwidth stress even when nominal accuracy is not extremely low.
+
+3. **Epoch-based decision logic.** BWC reuses FDP's epoch length of **500 cache accesses** and the same five-level control space, but changes the trigger condition. At each epoch boundary:
+   - If `LLC_RQ_util > 80%`, or `MSHR_util > 85%`, or `accuracy < 1%`, BWC moves one level **down** toward more conservative prefetching.
+   - If `LLC_RQ_util < 30%`, and `MSHR_util < 50%`, and `accuracy > 80%`, BWC moves one level **up** toward more aggressive prefetching.
+   - Otherwise, it holds the current level.
+
+   This makes BWC deliberately asymmetric: it throttles readily under pressure, but accelerates only when both congestion and accuracy indicate that extra prefetching is safe.
+
+4. **Dual actuator: confidence threshold + rate limiter.** After selecting a new level, BWC updates the same SPP confidence thresholds used by FDP (`pf_threshold`, `fill_threshold`), but adds a second actuator absent from FDP: an **issue-period rate limiter**. The five levels map to:
+
+| Level | `pf_threshold` | `fill_threshold` | `issue_period` | Effect |
+|------|----------------|------------------|----------------|--------|
+| 1 | 80 | 90 | 4 | Issue only every 4th eligible candidate |
+| 2 | 60 | 90 | 2 | Issue only every 2nd eligible candidate |
+| 3 | 25 | 90 | 1 | Baseline SPP behavior |
+| 4 | 15 | 75 | 1 | More aggressive than baseline |
+| 5 | 5 | 50 | 1 | Most aggressive |
+
+The **placement of the rate limiter is important**. In the implementation, BWC checks `bwc_should_issue()` *before* the Prefetch Filter's combined check-and-set operation. This avoids marking a line as "already prefetched" when BWC actually decided to suppress it. In other words, dropped candidates do not poison SPP's own bookkeeping.
+
+Operationally, this means BWC can respond in two different ways depending on the bottleneck. If low-confidence candidates dominate, raising `pf_threshold` filters them out directly. If a workload still produces many high-confidence candidates under pressure, the issue-period limiter can reduce traffic without changing the predictor itself. This is why BWC behaves differently from FDP in the 2-core case: FDP changes only the confidence threshold, whereas BWC can also explicitly downsample the issued stream.
+
+### 1.4 Workloads
 
 | Benchmark | Class | Memory Profile |
 |-----------|-------|---------------|
