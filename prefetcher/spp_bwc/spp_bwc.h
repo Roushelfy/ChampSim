@@ -1,12 +1,25 @@
 #ifndef SPP_BWC_H
 #define SPP_BWC_H
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
 #include "cache.h"
 #include "modules.h"
 #include "msl/lru_table.h"
+
+#ifndef SPP_BWC_VARIANT_TAG
+#define SPP_BWC_VARIANT_TAG "BWC"
+#endif
+
+#ifndef SPP_BWC_ENABLE_GLOBAL_GSP
+#define SPP_BWC_ENABLE_GLOBAL_GSP 0
+#endif
+
+#ifndef SPP_BWC_ENABLE_TIERED_GLOBAL
+#define SPP_BWC_ENABLE_TIERED_GLOBAL 0
+#endif
 
 struct spp_bwc : public champsim::modules::prefetcher {
 
@@ -189,13 +202,36 @@ struct spp_bwc : public champsim::modules::prefetcher {
   static constexpr double BWC_THROTTLE_MSHR   = 0.85;
   static constexpr double BWC_ACCEL_LLC_RQ    = 0.30;
   static constexpr double BWC_ACCEL_MSHR      = 0.50;
+  static constexpr double BWC_SYMMETRIC_MSHR_AVG = 0.30;
+  static constexpr double BWC_TIER2_MSHR_AVG = 0.38;
+  static constexpr double BWC_TIER3_MSHR_AVG = 0.44;
+  static constexpr uint32_t BWC_SYMMETRIC_ISSUE_PERIOD = 2;
+  static constexpr uint32_t BWC_TIER2_ISSUE_PERIOD = 4;
+  static constexpr uint32_t BWC_TIER3_PF_THRESHOLD = 60;
+  static constexpr uint32_t BWC_SYMMETRIC_MIN_CORES = 4;
   // Accuracy-based fallback: throttle if accuracy is near-zero (catches pointer-chasing)
   static constexpr double BWC_ACC_LOW_THROTTLE = 0.01; // < 1% useful → throttle regardless of queue pressure
-
   uint64_t fdp_access_count    = 0;
   uint64_t fdp_epoch_pf_issued = 0;
   uint64_t fdp_epoch_pf_useful = 0;
   int      fdp_level           = 3;
+
+  // Measurement-only pressure tracking. This does not change controller behavior.
+  uint64_t pressure_epoch_sample_count = 0;
+  double   pressure_epoch_mshr_sum     = 0.0;
+  double   pressure_epoch_llc_rq_sum   = 0.0;
+  double   pressure_epoch_mshr_max     = 0.0;
+  double   pressure_epoch_llc_rq_max   = 0.0;
+
+  uint64_t pressure_epoch_count                  = 0;
+  double   pressure_epoch_avg_mshr_sum           = 0.0;
+  double   pressure_epoch_avg_llc_rq_sum         = 0.0;
+  double   pressure_global_mshr_max              = 0.0;
+  double   pressure_global_llc_rq_max            = 0.0;
+  uint64_t pressure_epoch_avg_mshr_above_thresh  = 0;
+  uint64_t pressure_epoch_max_mshr_above_thresh  = 0;
+  uint64_t pressure_epoch_avg_llc_rq_above_thresh = 0;
+  uint64_t pressure_epoch_max_llc_rq_above_thresh = 0;
 
   // Lookup tables indexed by fdp_level (1-based; index 0 is unused padding)
   static constexpr uint32_t FDP_PF_THRESH[6]    = {0, 80, 60, 25, 15,  5};
@@ -206,6 +242,20 @@ struct spp_bwc : public champsim::modules::prefetcher {
   uint32_t bwc_issue_period = 1;
   uint32_t bwc_drop_counter = 0;
 
+  // Global symmetric-pressure mode bookkeeping.
+  uint64_t symmetric_mode_epoch_count = 0;
+  double   max_global_avg_mshr_util   = 0.0;
+  double   max_global_max_mshr_util   = 0.0;
+  double   max_global_avg_llc_rq_util = 0.0;
+  double   max_global_max_llc_rq_util = 0.0;
+  double   current_global_avg_mshr_util = 0.0;
+  double   current_global_avg_llc_rq_util = 0.0;
+  uint64_t symmetric_tier1_epoch_count = 0;
+  uint64_t symmetric_tier2_epoch_count = 0;
+  uint64_t symmetric_tier3_epoch_count = 0;
+
+  void record_pressure_sample();
+  void finalize_pressure_epoch();
   [[nodiscard]] bool bwc_should_issue();
   void bwc_update_epoch();
   // ────────────────────────────────────────────────────────────────────────────
