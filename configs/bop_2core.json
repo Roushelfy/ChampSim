@@ -1,7 +1,0 @@
-{
-  "executable_name": "champsim_bop_2core",
-  "num_cores": 2,
-  "L2C": {
-    "prefetcher": "bop"
-  }
-}

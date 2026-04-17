@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import csv
-import json
 import re
 from pathlib import Path
 
@@ -18,37 +17,8 @@ RE_QUEUE_OCC = re.compile(r"cpu0->cpu0_L2C AVERAGE UPPER RQ OCCUPANCY:\s*([0-9.e
 RE_DEMAND_STALL = re.compile(r"CPU 0 Demand Stall Cycles:\s*(\d+)\s+\(([0-9.eE+\-]+)% of cycles\)")
 
 
-WORKLOADS = ["mcf", "lbm", "bzip2", "astar", "omnetpp", "sphinx3"]
-POLICIES = [
-    "no_pref",
-    "orig",
-    "fdp",
-    "bwc",
-    "c1_gsp_tiered",
-    "gsp_util",
-    "gsp_headgate",
-    "gsp_headgate_crit_rankcap",
-    "gsp_headgate_crit_confgate",
-    "gsp_headgate_crit_confgate_c2",
-    "gsp_headgate_crit_confgate_c3",
-    "gsp_headgate_crit_rescuebudget",
-    "gsp_headgate_crit_levelgate",
-    "gsp_headgate_crit_blacklist",
-    "gsp_headgate_crit_fastuse",
-    "crit_rankcap",
-    "crit_confgate",
-    "crit_rescuebudget",
-    "crit_levelgate",
-    "crit_blacklist",
-    "crit_fastuse",
-    "gsp_headgate_probe",
-    "gsp_headgate_dynboost",
-    "gsp_headgate_dynrunway",
-    "gsp_headgate_phaserotate",
-    "gsp_headgate_dynboost_phase",
-    "bop",
-]
-POLICY_PREFIXES = sorted(POLICIES, key=len, reverse=True)
+WORKLOADS = ["mcf", "lbm", "bzip2"]
+POLICIES = ["no_pref", "orig", "fdp", "bwc", "bop"]
 CANONICAL_FILES = [
     "no_pref_mcf_50M.txt",
     "orig_mcf_50M.txt",
@@ -78,48 +48,18 @@ def infer_tags(path: Path):
             break
 
     policy = "unknown"
-    if "baseline" in name:
+    if "no_pref" in name:
+        policy = "no_pref"
+    elif "orig" in name or "baseline" in name:
         policy = "orig"
-    else:
-        for prefix in POLICY_PREFIXES:
-            if prefix in name:
-                policy = prefix
-                break
-        if policy == "unknown" and "orig" in name:
-            policy = "orig"
-        elif policy == "unknown" and "fdp" in name:
-            policy = "fdp"
-        elif policy == "unknown" and ("c1_gsp_tiered" in name or "gsp_tiered" in name):
-            policy = "c1_gsp_tiered"
+    elif "fdp" in name:
+        policy = "fdp"
+    elif "bwc" in name:
+        policy = "bwc"
+    elif "bop" in name:
+        policy = "bop"
 
     return workload, policy
-
-
-def resolve_repo_path(value):
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    return Path(__file__).resolve().parents[1] / path
-
-
-def parse_manifest(path):
-    manifest_path = resolve_repo_path(path)
-    data = json.loads(manifest_path.read_text())
-    output_root = resolve_repo_path(data.get("output_root", Path("results") / "generated"))
-    default_log_dir = data.get("defaults", {}).get("log_dir", "logs")
-
-    paths = []
-    for index, experiment in enumerate(data.get("experiments", [])):
-        raw_log = experiment.get("output_log") or experiment.get("log")
-        if raw_log:
-            log_path = resolve_repo_path(raw_log)
-        else:
-            name = experiment.get("name", f"experiment_{index:02d}")
-            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._") or "experiment"
-            log_path = output_root / default_log_dir / f"{safe_name}.txt"
-        paths.append(log_path)
-
-    return paths
 
 
 def parse_int(m, idx, default=0):
@@ -188,15 +128,12 @@ def main():
 
     parser = argparse.ArgumentParser(description="Extract single-core metrics from ChampSim logs")
     parser.add_argument("--inputs", nargs="+", help="Optional explicit input ChampSim output files")
-    parser.add_argument("--manifest", help="Optional manifest or resolved manifest JSON file")
     parser.add_argument("--input-dir", default=str(default_input_dir), help="Canonical single-core log directory")
     parser.add_argument("--out-csv", default=str(default_out_csv), help="Output CSV path")
     parser.add_argument("--out-gaps", default=str(default_out_gaps), help="Output gap report path")
     args = parser.parse_args()
 
-    if args.manifest:
-        paths = parse_manifest(args.manifest)
-    elif args.inputs:
+    if args.inputs:
         paths = [Path(p) for p in args.inputs]
     else:
         input_dir = Path(args.input_dir)
@@ -257,8 +194,8 @@ def main():
     with gaps_path.open("w") as f:
         f.write("# Single-Core Coverage Gaps\n\n")
         f.write("## Required matrix\n")
-        f.write("- Workloads: mcf, lbm, bzip2, astar, omnetpp, sphinx3\n")
-        f.write("- Policies: no_pref, orig, fdp, bwc, c1_gsp_tiered, gsp_util, bop\n\n")
+        f.write("- Workloads: mcf, lbm, bzip2\n")
+        f.write("- Policies: no_pref, orig, fdp, bwc, bop\n\n")
         if missing:
             f.write("## Missing entries\n")
             for w, p in missing:

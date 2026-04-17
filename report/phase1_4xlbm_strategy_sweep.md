@@ -2,204 +2,222 @@
 
 ## Purpose
 
-This note records what we learned from the `4 x lbm` strategy search after the fair reruns were complete.
+This note implements the three follow-up strategy candidates from the quick diagnosis pass on the same short exploratory setup:
 
-The point is not to archive every temporary script or intermediate log. It is to keep the durable conclusions:
+- workload: `4 x 470.lbm-1274B`
+- window: `1M` warmup + `5M` simulation instructions
+- WS denominator: quick single-core `orig` IPC from `results/quick/phase_a_single_core_metrics.csv`
 
-- which algorithms were tried,
-- which ones were worth keeping,
-- which bottleneck they exposed,
-- and what we should change next.
+These results are meant to explain behavior and rank strategy directions quickly. They do **not** replace the longer Phase 1 results in `phase1.md`.
 
-## 1. The Algorithms We Tried
+The baseline rows reused from the earlier quick pass are:
 
-The `4 x lbm` case was used to probe one specific question:
+- `orig`
+- `fdp`
+- `bwc`
+- `bwc_gsp v0`
 
-> Can the controller detect and respond to symmetric shared pressure without destroying useful streaming help?
+The three implemented candidates in this sweep are:
 
-The main candidates were:
+1. `c1_gsp_tiered`: tiered shared-resource-aware throttling
+2. `c2_mc_prefprio`: memory-controller demand-over-prefetch scheduling
+3. `c3_sigutil`: signature utility filtering
 
-1. `bwc`
-   - original local bandwidth-aware controller
-2. `bwc_gsp v0`
-   - first global-symmetric-pressure issue floor
-3. `c1_gsp_tiered`
-   - stronger tiered shared-pressure throttle
-4. `gsp_util`
-   - `c1_gsp_tiered` plus a pressure-gated utility filter
-5. `c2_mc_prefprio`
-   - demand-over-prefetch scheduling in the DRAM controller
-6. `c3_sigutil`
-   - an earlier, aggressive signature-utility gate
+The final repo state keeps **candidate 1** only. After removing the loser implementations, I reran candidate 1 and reproduced the same metrics (`WS=1.065147`, `DBUS=4.871`, `row-hit=0.05107`) on the final code state.
 
-Only `c1_gsp_tiered` and `gsp_util` remained plausible after the first sweep. The others were still useful because they clarified what kind of intervention does not work.
+## Unified Comparison
 
-## 2. Fair Rerun Summary
+| Policy | WS | Delta vs orig | Delta vs bwc | PF issued | PF useful | DBUS | RQ row-hit | Key signal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `orig` | 1.063191 | +0.00% | -0.27% | 1,454,031 | 75,406 | 4.468 | 0.0477 | `SPP_ORIG`, no throttling |
+| `fdp` | 1.057781 | -0.51% | -0.78% | 226,961 | 51,644 | 5.807 | 0.0561 | all cores ended at `level=1`, `pf_threshold=80` |
+| `bwc` | 1.066068 | +0.27% | +0.00% | 1,453,328 | 75,676 | 4.462 | 0.0474 | all cores stayed `L3`, `issue_period=1` |
+| `bwc_gsp` | 1.063421 | +0.02% | -0.25% | 978,726 | 39,775 | 4.497 | 0.0484 | symmetric mode detected, but only `issue_period=2` floor |
+| `c1_gsp_tiered` | 1.065147 | +0.18% | -0.09% | 595,058 | 24,132 | 4.871 | 0.0511 | tier epochs total `57 / 145 / 81` for tiers `1 / 2 / 3` |
+| `c2_mc_prefprio` | 0.995166 | -6.40% | -6.65% | 1,257,269 | 60,444 | 12.920 | 0.0643 | `demand_scheduled=780,955`, `prefetch_scheduled=346,100`, `prefetch_bypassed=3,755,509` |
+| `c3_sigutil` | 1.048343 | -1.40% | -1.66% | 265,977 | 25,554 | 6.145 | 0.0592 | filtered `2,492,786` prefetches, final `level=5` |
 
-After fixing the config-drift issue in the early `gsp_*` comparisons, the fair short-window `4 x lbm` results are:
+Two points stand out immediately:
 
-| Policy | WS | Delta vs `orig` | PF Issued | DBUS | Row-Hit Rate |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `orig` | `1.066559` | baseline | `1,453,328` | `4.462` | `0.04742` |
-| `bwc` | `1.066559` | `0.00%` | `1,453,328` | `4.462` | `0.04742` |
-| `c1_gsp_tiered` | `1.064832` | `-0.16%` | `529,692` | `4.666` | `0.04896` |
-| `gsp_util` | `1.064486` | `-0.19%` | `573,888` | `4.635` | `0.04963` |
+- The best **new** strategy is `c1_gsp_tiered`.
+- The best **overall** short-run result is still the older `bwc` baseline.
 
-Two takeaways dominate:
+So the sweep did find a better direction than `bwc_gsp v0`, but it did **not** yet beat the original `bwc` on `4xlbm`.
 
-- plain `bwc` is still effectively a no-op on `4 x lbm`
-- the newer shared-pressure controllers finally activate, but they still do not produce a WS gain
+## Candidate 1: Tiered Shared-Pressure Throttling
 
-So the `4 x lbm` problem has moved from a sensing failure to an actuation failure.
+### What changed
 
-## 3. What Each Algorithm Taught Us
+I extended `bwc_gsp v0` into a three-tier global throttle:
 
-### 3.1 `bwc`: the original blind spot is real
+- tier 1: `global_avg_mshr >= 0.30` => `issue_period >= 2`
+- tier 2: `global_avg_mshr >= 0.38` => `issue_period >= 4`
+- tier 3: `global_avg_mshr >= 0.44` => `issue_period >= 4` and `pf_threshold >= 60`
 
-In the fair rerun, `bwc` matches `orig` almost exactly:
+The original local BWC controller stayed intact; the new logic only adds a global floor/guard.
 
-- same WS
-- same PF volume
-- same DBUS
-- same row-hit rate
+### What happened
 
-The pressure statistics explain why:
+`c1_gsp_tiered` fixed the original blind spot:
 
-- average epoch MSHR utilization is only about `0.365`
-- max epoch MSHR utilization is `0.5`
-- average epoch LLC RQ utilization is about `0.0035`
-- max epoch LLC RQ utilization is `0.234375`
-- all threshold-crossing fractions stay at `0`
+- `bwc_gsp v0` had symmetric mode, but only a weak `issue_period=2` floor.
+- `c1` actually spent meaningful time in stronger tiers: total tier counts were `57 / 145 / 81`.
+- PF volume fell from `978,726` in `bwc_gsp v0` to `595,058`.
+- WS recovered from `1.063421` to `1.065147`.
 
-So the original local BWC thresholds are simply too high to classify the symmetric `4 x lbm` regime as “pressure.”
+Relative to `orig`, candidate 1:
 
-### 3.2 `bwc_gsp v0`: the sensor direction was right, but too weak
+- improved WS by `+0.18%`
+- cut PF issues by `-59.1%`
+- raised row-hit rate by `+7.2%`
+- raised DBUS by `+9.0%`
 
-The first global symmetric-pressure version was useful because it proved the blind spot was not imaginary.
+Per-core IPC moved unevenly:
 
-It detected the regime, but the actuator was too weak:
+- cpu0: `-1.15%`
+- cpu1: `+0.39%`
+- cpu2: `+3.53%`
+- cpu3: `-2.00%`
 
-- symmetric mode engaged
-- the issue floor only moved to `issue_period=2`
-- that was not enough to create a durable win
+At the same time, L1D miss latency dropped from roughly `1090` cycles in `orig` to roughly `974-989` cycles here, which means the stronger global throttle did reduce some bad queueing. But it still over-throttled useful traffic on two cores.
 
-This was the point where it became clear that `4 x lbm` needed more than one additional if-statement.
+### Verdict
 
-### 3.3 `c1_gsp_tiered`: better sensing, still a coarse actuator
+This is the best of the three new ideas because it **does** solve the symmetric-pressure detection problem that `bwc` and `bwc_gsp v0` missed. But its actuator is still too coarse:
 
-`c1_gsp_tiered` is the cleanest proof that the sensing problem is now mostly fixed.
+- it is global rather than utility-aware,
+- it reduces PF volume aggressively,
+- and it helps some cores while over-throttling others.
 
-In the fair rerun:
+So candidate 1 is a good **directional winner**, not a final solution.
 
-- all four cores finish with `issue_period=4`
-- `symmetric_mode_epochs` is about `69-72` per core
-- average epoch MSHR utilization is about `0.352-0.355`
-- PF volume falls by `63.6%`
+## Candidate 2: MC Demand-Over-Prefetch Scheduling
 
-But the outcome is still negative:
+### What changed
 
-- WS = `1.064832`
-- delta vs `orig` = `-0.16%`
+I patched the DRAM controller so that:
 
-So `c1_gsp_tiered` solved the wrong half of the problem. It can tell that the machine is under shared pressure, but it still acts too bluntly once that happens.
+- DRAM requests preserve `type` and `cpu`,
+- in read mode, if any unscheduled demand request exists, the scheduler only considers demand requests,
+- tie-breaker inside a class is `bank free > row-buffer hit > earlier ready_time`.
 
-### 3.4 `gsp_util`: utility filtering is the right class of idea, but still too weak
+I also logged:
 
-`gsp_util` was meant to keep the shared-pressure detection from `c1_gsp_tiered` while preserving more useful streams.
+- `RQ_DEMAND_SCHEDULED`
+- `RQ_PREFETCH_SCHEDULED`
+- `RQ_PREFETCH_BYPASSED`
 
-It does engage the utility path:
+### What happened
 
-- `enabled_epochs` is about `82-86` per core
-- filtered prefetches are nonzero
+The policy clearly activated:
 
-But the magnitude is too small to dominate behavior:
+- `demand_scheduled=780,955`
+- `prefetch_scheduled=346,100`
+- `prefetch_bypassed=3,755,509`
 
-- filtered prefetches are only `0`, `447`, `87`, and `146`
-- PF volume still changes mostly because of the global `issue_period=4` floor
+It even improved some local metrics:
 
-The result:
+- row-hit rate increased to `0.0643` (`+35.0%` vs `orig`)
+- LLC miss latency dropped to about `3717-3774` cycles from about `7145-7420`
+- L1D miss latency also fell sharply
 
-- WS = `1.064486`
-- delta vs `orig` = `-0.19%`
+But the global outcome was disastrous:
 
-This is the key reflection from the current rerun on `4 x lbm`:
+- WS fell to `0.995166`
+- DBUS exploded to `12.920`
+- every core lost IPC (`-5.0%` to `-9.0%`)
 
-> shared-pressure awareness is now present, but the current utility filter is too weak to decide which streams should survive.
+### Verdict
 
-### 3.5 `c2_mc_prefprio`: acting only at the memory controller is too late
+This strategy acts **too late** in the pipeline. By the time requests reach the MC:
 
-This branch was valuable because it showed that not every “demand-friendly” policy is actually good for throughput.
+- the useful and harmful prefetches are already mixed together,
+- the controller is no longer shaping upstream issue behavior,
+- and prioritizing demand requests disrupts the traffic pattern badly enough that bus congestion becomes the new dominant problem.
 
-The memory-controller prioritization idea:
+So candidate 2 shows that “just prioritize demand at the MC” is not sufficient for this workload. It improves some latency metrics while making total throughput much worse.
 
-- improved some local latency and row-buffer metrics,
-- but it degraded overall throughput badly,
-- because by the time requests reached the MC, the useful and harmful prefetches were already mixed together.
+## Candidate 3: Signature Utility Filter
 
-So this intervention point was too late in the pipeline.
+### What changed
 
-### 3.6 `c3_sigutil`: utility filtering can also overreact
+I added a direct-mapped `512`-entry signature utility table inside the `spp_bwc` path:
 
-The first signature-utility filter failed for the opposite reason:
+- issue: signature credit `-1`
+- useful hit: signature credit `+4`
+- epoch end: decay each valid entry by `1` toward zero
 
-- it penalized too aggressively,
-- usefulness feedback arrived too late,
-- and streaming help was cut off before the workload could benefit.
+The gate is enabled only when `global_avg_mshr_util >= 0.30`. Under pressure, signatures with negative credit are skipped.
 
-This was still a useful failure because it showed that “utility-aware” is not enough by itself. The credit model and enable conditions matter a lot.
+### What happened
 
-## 4. The Observed Bottleneck
+This logic was extremely aggressive:
 
-The durable `4 x lbm` bottleneck is now:
+- filtered prefetches: `2,492,786`
+- utility-positive hits recorded: `26,417`
+- PF issued dropped to `265,977` (`-81.7%` vs `orig`)
+- all cores ended at `level=5`, `pf_threshold=5`, `fill_threshold=50`
 
-1. local BWC thresholds miss symmetric saturation
-2. once shared pressure is finally detected, the current global throttle is too coarse
-3. the current utility filter is too weak to preserve only the good streams
+The result was better than `fdp`, but still clearly below the best baselines:
 
-In one sentence:
+- WS = `1.048343`
+- DBUS = `6.145`
+- row-hit = `0.0592`
 
-> `4 x lbm` needs global pressure awareness and a selective actuator at the same time; either one alone is not enough.
+Per-core IPC was mixed:
 
-This is why the fair reruns look the way they do:
+- cpu0: `-7.81%`
+- cpu1: `-2.58%`
+- cpu2: `+4.40%`
+- cpu3: `+0.57%`
 
-- `bwc` sees nothing and does nothing
-- `c1_gsp_tiered` sees the pressure but over-throttles indiscriminately
-- `gsp_util` is directionally better as a design idea, but still behaves mostly like a coarse global throttle
+### Verdict
 
-## 5. Reflection
+The idea is promising, but this first implementation is too eager under short epochs:
 
-The early exploratory sweep made it look as if `c1_gsp_tiered` or `gsp_util` might already be slightly positive on `4 x lbm`.
+- signatures are penalized immediately on issue,
+- usefulness feedback arrives later,
+- and once pressure is high, the gate shuts off too much streaming help too early.
 
-The fair reruns corrected that:
+So candidate 3 confirms that **utility-aware filtering is the right class of idea**, but the credit model needs softer penalties, longer observation, or delayed enablement.
 
-- those small positive deltas did not survive the config-drift fix
-- the real result is slightly negative for both controllers
+## Root-Cause Summary
 
-That correction matters because it changes the project story in a healthy way:
+The sweep makes the current `4xlbm` bottleneck much clearer:
 
-- the win is not “we already fixed `4 x lbm`”
-- the win is “we now know exactly why the old controller fails and why the first fix was not selective enough”
+1. `bwc` really does have a sensing blind spot for symmetric pressure. Candidate 1 proves that a global pressure signal can detect and react to that regime.
+2. But sensing alone is not enough. Candidate 1 still uses a coarse actuator, so it cannot distinguish useful vs harmful prefetch streams.
+3. Acting only at the DRAM controller is too late. Candidate 2 improved local latency and row locality but destroyed overall throughput.
+4. Utility filtering is necessary, but the first signed-credit design was too aggressive on a short run. Candidate 3 cut too much help before the workload could repay it.
 
-So the most honest reading of the current `4 x lbm` work is:
+The one-sentence conclusion is:
 
-- diagnosis success
-- implementation progress
-- but not yet a performance success
+> `4xlbm` needs **global pressure awareness plus gentle utility-aware filtering**, not pure confidence throttling and not MC-only demand priority.
 
-## 6. What To Change Next
+## Winner And Repo State
 
-The next controller should preserve the part that is now working:
+### Winner among the three new candidates
 
-- shared-pressure detection
+`c1_gsp_tiered` is the winner of this sweep.
 
-but replace the part that is still too crude:
+Why:
 
-- a one-size-fits-all issue floor
+- it is the only new strategy that improved over `orig` and over `bwc_gsp v0`,
+- it solved the original symmetric-pressure blind spot,
+- and it reproduced cleanly when rerun on the final repo state.
 
-That means the next useful design step is not another threshold tweak. It is a controller that can make finer utility distinctions under pressure, for example by:
+### Why the other two lost
 
-- delaying penalties until usefulness has enough time to be observed
-- targeting only clearly negative-utility prefetch traffic
-- or adding a narrower shared-resource intervention instead of a uniform global slowdown
+- `c2_mc_prefprio` lost because it moved the intervention too late and turned bus congestion into the dominant bottleneck.
+- `c3_sigutil` lost because its utility gate was too aggressive and cut off too much useful streaming support.
 
-The `4 x lbm` case no longer looks mysterious. It looks like an actuator-design problem.
+### Final repo state
+
+The final source tree keeps the candidate 1 implementation:
+
+- `prefetcher/spp_bwc/*` contains the shared instrumentation base
+- `prefetcher/spp_gsp_tiered/*` contains the selected policy wrapper
+- the DRAM controller is back on the baseline path
+
+This means the repo now matches the final rerun result for `c1_gsp_tiered`.
+
