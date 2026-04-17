@@ -1,281 +1,313 @@
-# Phase 1 Progress Report — Syncup #1
-## OpenEvolve-Optimized Bandwidth-Aware Prefetcher Throttling in ChampSim
-### 15-740 Computer Architecture · Spring 2026
-
----
-
-## 1. Project Overview & Motivation
-
-Modern hardware prefetchers dramatically improve cache hit rates for regular, strided workloads,
-but they degrade performance under memory bandwidth pressure by evicting useful lines and
-monopolizing DRAM bandwidth with inaccurate requests. The dominant industrial response —
-**Feedback-Directed Prefetching (FDP)** (Srinath et al., HPCA 2007) — throttles aggressiveness
-based on **accuracy** (useful prefetches / issued prefetches) using statically hand-tuned
-confidence thresholds.
-
-Our thesis is that **accuracy is a lagging, indirect signal**. By the time accuracy degrades,
-bandwidth damage has already been done. More critically, accuracy cannot distinguish between
-*demand-serving capacity* and *wasted bandwidth*: a prefetcher with 0.01% accuracy may still
-be providing meaningful DRAM row-buffer warm-up effects that benefit latency even as it saturates
-the memory controller queue.
+# Phase 1 Compact Report
 
-**Our goal**: replace hand-tuned accuracy thresholds with an **OpenEvolve-optimized
-bandwidth-aware controller** that observes direct microarchitectural pressure signals —
-L2C/LLC MSHR occupancy and DRAM Read Queue (RQ) fill level — and uses an LLM-evolved policy
-function to select throttle levels in real time.
+This is the single authoritative Phase 1 note. Older `phase1_*` files are archive only.
 
-Phase 1 (Weeks 1–2) establishes the infrastructure and FDP baseline required to demonstrate
-this gap. The mcf experimental results below provide compelling empirical evidence that
-accuracy-based throttling is fundamentally insufficient.
+All numbers below are from corrected short-run reruns on `office-kijun` with:
 
----
+- `1M` warmup instructions
+- `3M` simulation instructions
 
-## 2. Engineering Achievements (Weeks 1–2)
+One earlier Phase 1B attempt used small overlay configs that changed `executable_name` but did
+not reliably override `L2C.prefetcher` under this repo's `config.sh` merge behavior. Those runs are
+invalid and are intentionally excluded here. Everything in this report uses rebuilt full configs
+and corrected reruns only.
 
-### 2.1 ChampSim Infrastructure Setup
+Authoritative artifacts:
 
-- Cloned ChampSim from the upstream GitHub repository and resolved vcpkg submodule
-  initialization on WSL2 Ubuntu 22.04.
-- Configured a single-core baseline using the `spp_dev` prefetcher at L2C via a custom
-  `spp_config.json`. Verified end-to-end simulation with a 401.bzip2 trace (1M warmup +
-  5M simulation instructions).
-- Confirmed trace availability: `401.bzip2-226B.champsimtrace.xz` (751 MB) and
-  `429.mcf-51B.champsimtrace.xz` (1.3 GB) from the DPC-3 public trace repository.
+- `results/generated/quick_1m3m_coord_20260417/summary/single_core.csv`
+- `results/generated/quick_1m3m_coord_20260417/summary/multicore.csv`
+- `results/generated/phase1c_cycle1_fetch/cycle1_multi.csv`
+- `results/generated/phase1c_cycle23_fetch/cycle23_single.csv`
+- `results/generated/phase1c_cycle23_fetch/cycle23_multi.csv`
 
-### 2.2 FDP Static-Threshold Controller (spp_dev.cc / spp_dev.h)
+## 1. Motivation / Observation
 
-Implemented a complete FDP controller embedded within the existing `spp_dev` prefetcher module,
-with the following key design decisions:
+Phase 1 goal:
 
-#### Epoch-Based Feedback Tracking
+1. improve `4 x 470.lbm` weighted speedup by `+1%` over `orig`
+2. then carry the same idea to `429.mcf + 470.lbm` without harming `mcf`
 
-```
-FDP_EPOCH_SIZE = 500   (demand LOAD accesses to L2C triggering prefetcher_cache_operate)
-FDP_ACC_HIGH   = 0.80  (accuracy → increment aggressiveness level)
-FDP_ACC_LOW    = 0.50  (accuracy → decrement aggressiveness level)
-```
-
-Per-epoch counters (`fdp_epoch_pf_issued`, `fdp_epoch_pf_useful`) accumulate across all
-SPP-issued prefetches (both LLC-fill and L2C-fill candidates), not just those hitting in
-the demand filter. The epoch fires when `fdp_access_count` reaches `FDP_EPOCH_SIZE` inside
-`prefetcher_cache_operate`.
-
-**Critical calibration insight**: ChampSim's `should_activate_prefetcher()` in `cache.cc`
-gates `prefetcher_cache_operate` to demand LOADs only — SPP's own fill traffic does **not**
-trigger the callback. For bzip2 5M (simulation phase), only ~1,875 demand calls occur.
-`FDP_EPOCH_SIZE = 500` was chosen to give ~3–4 epochs for functional verification.
+What the earlier search established:
 
-#### 5-Level Aggressiveness Mapping
+- single-core `lbm` is easy to preserve
+- hard tail cutting hurts `4 x lbm`
+- controller-level runway/phase coordination changes bulk counters, but did not beat `orig`
 
-| Level | `pf_threshold` | `fill_threshold` | Notes |
-|-------|---------------|-----------------|-------|
-| 1     | 80            | 90              | Most conservative |
-| 2     | 60            | 90              | |
-| 3     | 25            | 90              | **Default (SPP original)** |
-| 4     | 15            | 75              | |
-| 5     | 5             | 50              | Most aggressive |
+That left a more specific Phase 1C question:
 
-#### Robust C++ Engineering
-
-Three notable implementation decisions prevent subtle correctness bugs:
+> if shared budget is limited, which prefetches should survive because they reduce
+> **demand-critical** misses rather than merely increasing bulk useful-prefetch counts?
 
-1. **Zero-issue epoch guard**: `if (fdp_epoch_pf_issued == 0) return;` prevents a silent
-   epoch with no prefetches from being treated as 100% accuracy and falsely incrementing
-   the level.
-
-2. **Per-instance state (no multi-core bleed)**: All FDP fields (`fdp_level`,
-   `fdp_epoch_pf_issued`, `fill_threshold`, `pf_threshold`) are declared as non-static
-   instance members of `spp_dev`. Each L2C cache object owns its own copy. In multicore
-   simulations, cores do not share throttle state.
-
-3. **Zero-overhead dual-binary evaluation via `if constexpr`**:
-   ```cpp
-   // spp_dev.h
-   static constexpr bool FDP_ENABLED = true;  // false → baseline binary
-
-   // spp_dev.cc
-   void spp_dev::fdp_update_epoch() {
-     if constexpr (!FDP_ENABLED) return;  // compiled out entirely
-     ...
-   }
-   ```
-   Two separate binaries (`champsim_baseline`, `champsim_fdp`) are built from the same
-   source by toggling this flag, eliminating any instrumentation overhead or code divergence
-   between experimental conditions.
+This cycle stayed aligned with the meta-controller framing. It did not change SPP's core pattern
+generation. Instead it tried to change which already-generated candidates survive under pressure.
 
-4. **Parameter-passing fix**: `pf_threshold` is passed by value to `PATTERN_TABLE::read_pattern()`
-   to avoid a dangling `_parent->pf_threshold` read through a nested class pointer, which
-   would be undefined behavior if the parent is moved.
+Methodology for this cycle:
 
----
+- `5` logical controller families
+- `3` short retuning cycles per family
+- `4 x lbm` as the primary target
+- `1c lbm` as the safety gate before any candidate could continue
+- `mcf + lbm` kept closed unless a `4 x lbm` winner appeared
+- remote execution on `office-kijun` using isolated workspaces per family
 
-## 3. Experimental Methodology & Results
+## 2. Ideas Tried
 
-### 3.1 Functional Verification — 401.bzip2 (5M Instructions)
+All five families start from the same safe, tail-preserving controller base and differ only in the
+selectivity rule applied under shared pressure.
 
-**Purpose**: Confirm FDP epochs fire and correctly throttle a compute-bound workload with
-low SPP accuracy.
+| Policy | Main signal | Intended effect |
+| --- | --- | --- |
+| `crit_blacklist` | learned bad-signature utility | block chronically unhelpful mid/tail candidates |
+| `crit_confgate` | candidate confidence | keep only high-confidence tail traffic |
+| `crit_levelgate` | pressure level + confidence | demote or keep different depths depending on observed pressure |
+| `crit_rankcap` | candidate rank | cap deeper runway unless usefulness evidence promotes it |
+| `crit_rescuebudget` | per-core rescue score | spend extra budget only on the currently best-looking core |
 
-**Configuration**: 1M warmup + 5M simulation, `FDP_EPOCH_SIZE = 500`.
+Each family was run through three cycles:
 
-**FDP Epoch Trace** (captured from runtime debug output):
+- `cycle1`: first usable implementation
+- `cycle2`: first retune after observing failure mode
+- `cycle3`: one more retune intended either to rescue the idea or prove it should be retired
 
-| Epoch | Issued | Useful | Accuracy | Level Before → After |
-|-------|--------|--------|----------|-----------------------|
-| 1     | 3,714  | 275    | 7.4%     | 3 → 2                 |
-| 2     | 2,520  | 369    | 14.6%    | 2 → 1                 |
-| 3     | 959    | 367    | 38.3%    | 1 → 1 (clamped)       |
-| 4     | 1,059  | 369    | 34.8%    | 1 → 1 (clamped)       |
+## 3. Results
 
-**Result**: `[FDP] Final level=1  pf_threshold=80  fill_threshold=90`
+### 3.1 Single-core guardrail
 
-The controller correctly identified bzip2's consistently low SPP accuracy (well below
-`ACC_LOW = 0.50`) and ratcheted aggressiveness from the default Level 3 down to the minimum
-Level 1 within two epochs. Functional verification **passed**.
+All corrected `cycle2` and `cycle3` candidates preserved `1c lbm` exactly.
 
-### 3.2 Architectural Evaluation — 429.mcf (50M Instructions)
+| Workload | IPC |
+| --- | --- |
+| `orig_lbm_1M3M` | `0.8747` |
+| every `cycle2/cycle3` criticality candidate | `0.8747` |
 
-**Purpose**: Measure the performance impact of FDP throttling on a canonical
-memory-bandwidth-intensive workload (minimum-cost flow solver; SPEC CPU2006).
+So the remaining problem is entirely multicore.
 
-**Configuration**: 10M warmup + 50M simulation, `FDP_EPOCH_SIZE = 500`.
-Two separate binaries from identical source; baseline has `FDP_ENABLED = false` (thresholds
-permanently frozen at Level 3 defaults).
+### 3.2 `4 x lbm` cycle progression
 
-| Metric | Baseline (SPP, no FDP) | FDP (SPP + FDP, Level 1) | Δ |
-|--------|------------------------|--------------------------|---|
-| **IPC** | **0.1212** | **0.1165** | **−3.88%** |
-| Simulation Cycles | 412,479,890 | 429,241,406 | +4.06% |
-| L2C Prefetch Issued | 4,739,040 | 4,728,524 | −0.22% |
-| L2C Prefetch Useful | 690 | 783 | +13.5% |
-| L2C Prefetch Accuracy | 0.0146% | 0.0166% | +0.002pp |
-| L2C Total Accesses | 12,204,884 | 12,194,770 | −0.08% |
-| LLC Total Accesses | 6,503,027 | 5,173,042 | **−20.4%** |
-| LLC Total Misses | 4,385,561 | 3,680,657 | −16.1% |
-| DRAM RQ Row-Buffer Hit | 6,802 | 3,769 | **−44.6%** |
-| DRAM RQ Row-Buffer Miss | 4,334,790 | 3,669,815 | −15.3% |
-| FDP Final Level | 3 (frozen) | 1 | — |
+Baseline:
 
----
+- `orig_4xlbm_1M3M` weighted speedup = `1.0540756831`
 
-## 4. Key Insights & Architectural Pathologies
+Progress across the full 5-family x 3-cycle search:
 
-### 4.1 Why Did IPC Drop Despite Near-Zero Accuracy? (The Row-Buffer Warm-Up Effect)
+| Policy | Cycle 1 | Cycle 2 | Cycle 3 | Best read |
+| --- | --- | --- | --- | --- |
+| `crit_blacklist` | `+0.000%` | `+0.000%` | `+0.000%` | completely inert |
+| `crit_confgate` | `-0.575%` | `-0.174%` | `+0.000%` | over-prune -> nearly safe -> exact `orig` |
+| `crit_levelgate` | `-0.553%` | `-0.553%` | `-0.163%` | best nontrivial candidate |
+| `crit_rankcap` | `-0.672%` | `-0.390%` | `-0.423%` | still a suppressor, not a learner |
+| `crit_rescuebudget` | `-0.564%` | `-0.390%` | `-0.390%` | rescue path collapsed |
 
-At 0.0146% accuracy, virtually every prefetch SPP issues for mcf is "wasted" from a cache
-reuse perspective — it fetches a line that no demand request will consume before eviction.
-Yet removing or throttling these prefetches **hurts** performance by 3.88%.
+No candidate beat `orig`. The best nontrivial result was:
 
-The mechanism is revealed by the DRAM row-buffer hit statistics. Baseline SPP issues
-4.74 million prefetches with coherent stride patterns that happen to exhibit *locality in
-DRAM address space*, consistently accessing the same DRAM rows as subsequent demand misses.
-This primes the DRAM row buffer, converting row-buffer misses to hits for demand traffic.
+- `crit_levelgate cycle3`: `WS = 1.0523608094`, which is still `-0.163%` vs `orig`
 
-When FDP throttles to Level 1 (`pf_threshold = 80`), the DRAM RQ Row-Buffer Hit count drops
-from **6,802 to 3,769 (−44.6%)**. Even though fewer total DRAM transactions are issued
-(3,669,815 vs. 4,334,790 row-buffer misses), the *effective latency per demand miss increases*
-because row-buffer warm-up is lost. mcf's IPC is so low (~0.12) and so entirely determined by
-DRAM latency that even a modest increase in average DRAM latency translates directly to a
-measurable cycle count increase.
+### 3.3 Why each family failed
 
-This is a well-characterized but underappreciated phenomenon: **prefetcher accuracy at the
-cache level does not capture memory-level parallelism overlap or DRAM row-buffer warm-up
-effects**. A prefetch can be "useless" by every cache metric and still improve IPC by
-structuring DRAM access patterns.
+`crit_blacklist`
 
-### 4.2 Why Did FDP Fail to Reduce Bandwidth? (Confidence ≠ Usefulness for mcf)
+- `filtered_prefetches=0`, `mid_filtered=0`, and `tail_filtered=0` in all three cycles.
+- The blacklist never accumulated a strong enough negative signal to change behavior.
+- Result: exact `orig` every time.
 
-FDP's throttle mechanism raises the minimum confidence threshold (`pf_threshold: 25 → 80`
-at Level 1), implicitly assuming that low-confidence prefetches are the inaccurate ones.
-For mcf, this assumption fails catastrophically.
+`crit_confgate`
 
-Even at `pf_threshold = 80`, SPP still issues **4,728,524 prefetches** — only 10,516 fewer
-(−0.22%) than baseline. The root cause: SPP's confidence model measures *pattern consistency*
-in its Signature and Pattern Tables, not *demand reuse likelihood*. mcf's minimum-cost flow
-kernel traverses a large, sparse graph with consistent but widely-strided pointer chains.
-These strides produce stable, high-confidence SPP signatures despite no subsequent demand reuse.
+- `cycle1` over-pruned badly: about `281k-288k` tail candidates filtered per core and `WS=-0.575%`.
+- `cycle2` relaxed the thresholds and reduced tail filtering to about `50k` per core while rescuing
+  about `240k-255k` tail candidates per core; WS improved to `-0.174%` but still lost.
+- `cycle3` relaxed far enough that filtering became zero and the result reverted to exact `orig`.
+- Interpretation: this family only interpolates between "harmful over-pruning" and "effectively off".
+  No positive region appeared in the short-run search.
 
-The confidence score is high because the *pattern is regular*; the accuracy is near zero because
-the *accessed data is not reused*. These two properties are orthogonal, but FDP's static
-threshold conflates them.
+`crit_levelgate`
 
-### 4.3 The Fundamental Insufficiency of Accuracy-Based Throttling
+- `cycle3` was the strongest nontrivial candidate:
+  `PF useful = 78,796` vs `45,442` for `orig`, `DBUS = 4.410` vs `4.468`, and
+  `tail_demoted ≈ 262k-264k` per core with no hard tail drops.
+- Yet WS still landed at `-0.163%`.
+- This is the clearest evidence from the cycle: a policy can improve bulk proxies such as useful
+  prefetch count and average DRAM bus occupancy without improving the misses that dominate WS.
 
-These two pathologies expose a structural limitation of accuracy-based throttling:
+`crit_rankcap`
 
-1. **Signal lag**: Accuracy is retrospective. It reports how many past prefetches were useful
-   but cannot predict whether the current memory controller queue is saturated or whether
-   bandwidth reduction would benefit demand traffic.
+- `cycle2` and `cycle3` widened the allowed ranks and reached `max_rank_observed=5`.
+- But `useful_promotions=0` stayed zero, so the policy never actually learned which deeper ranks
+  deserved rescue.
+- Result: the family remained a cap-based suppressor, not a criticality learner.
 
-2. **Wrong abstraction**: The relevant resource for memory-bound workloads is **DRAM bandwidth
-   and MSHR occupancy**, not prefetch accuracy. A controller observing accuracy but not queue
-   depth will misallocate bandwidth in both directions.
+`crit_rescuebudget`
 
-3. **Confidence ≠ usefulness**: SPP confidence measures pattern consistency, not demand reuse.
-   Confidence thresholds cannot filter high-confidence-but-useless prefetches that dominate
-   bandwidth on irregular memory-bound workloads.
+- `cycle1` over-favored one core and shifted IPC unevenly without improving total WS.
+- After softening that asymmetry, `cycle2` and `cycle3` reported
+  `rescuebudget_grant_windows=0` and `rescuebudget_suppressed_windows≈272-283`.
+- In other words, the "rescue" path never fired anymore. The policy collapsed into a plain
+  suppression baseline and stayed at `-0.390%`.
 
-Collectively, these observations constitute a **highly valuable negative result**: they provide
-direct empirical evidence — not merely theoretical argument — that accuracy-based throttling is
-insufficient for bandwidth contention scenarios, and that direct observation of DRAM and MSHR
-pressure signals is required. This is precisely the gap our bandwidth-aware controller targets.
+### 3.4 Quantitative bottleneck reading
 
----
+The key failure was not implementation correctness. The policies changed behavior, and the logs show
+that clearly. The problem is that the available signals still tracked **bulk usefulness** more than
+**throughput-critical usefulness**.
 
-## 5. Next Steps (Week 3)
+Three facts make that conclusion hard to avoid:
 
-### 5.1 Microarchitectural Signal Instrumentation
+1. `crit_blacklist` did nothing because its learning signal was too weak to separate good and bad
+   candidates.
+2. `crit_levelgate cycle3` improved the best bulk counters of the whole search, yet still lost in
+   weighted speedup.
+3. `BWC_TIMELY fill_age*` stayed entirely in `age0`, so the remaining loss did not look like a
+   simple "late prefetch arrival" problem in this short-run window.
 
-Instrument the following signals inside ChampSim, accessible from the SPP prefetcher callback:
+The refined bottleneck is therefore:
 
-| Signal | Source in ChampSim | Rationale |
-|--------|-------------------|-----------|
-| L2C MSHR occupancy | `CACHE::MSHR.occupancy` (at L2C) | Proxy for L2C miss pressure |
-| LLC MSHR occupancy | `CACHE::MSHR.occupancy` (at LLC) | Second-level pressure indicator |
-| DRAM RQ fill level | `MEMORY_CONTROLLER::RQ.occupancy` | Direct bandwidth pressure signal |
-| SPP-issued rate | Existing `fdp_epoch_pf_issued` | Absolute bandwidth consumed by prefetcher |
+> the controller still cannot predict which preserved prefetches reduce the demand misses that
+> actually move weighted speedup.
 
-These signals are sampled at each epoch boundary and constitute the feature vector passed to
-the throttling policy function.
+This is more precise than saying "criticality-aware control is needed" in the abstract. The current
+signals `confidence`, `useful`, `rank`, `density`, and similar counters are not yet aligned with
+the marginal WS contribution of a prefetch.
 
-### 5.2 Bandwidth-Aware Controller Prototype
+### 3.5 `mcf + lbm` gate
 
-Replace `fdp_update_epoch()` with a new `bwc_update_epoch()` function that takes the above
-feature vector and maps it to a throttle level. The initial implementation will be a
-hand-coded heuristic to establish correctness before OpenEvolve optimization:
+The same-scale corrected baseline remains:
 
-```
-if (dram_rq_util > 0.75 OR mshr_l2c_util > 0.80):
-    decrease aggressiveness level
-elif (dram_rq_util < 0.30 AND mshr_l2c_util < 0.40 AND accuracy > FDP_ACC_HIGH):
-    increase aggressiveness level
-else:
-    hold current level
+| Mix | CPU0 IPC | CPU1 IPC | WS |
+| --- | --- | --- | --- |
+| `orig_mcf_lbm_1M3M` | `0.03606` (`mcf`) | `0.8489` (`lbm`) | `1.3315735631` |
+
+No `4 x lbm` candidate beat `orig`, so this cycle makes **no** new `mcf + lbm` claim.
+
+## 4. Feedback
+
+What worked:
+
+- the search stayed within the meta-controller scope instead of turning into a new prefetcher
+- isolated workspaces plus corrected full-config builds made the evidence trustworthy
+- five distinct controller ideas were explored, and each was given three iterations
+
+What failed:
+
+- none of the five families beat `orig` on `4 x lbm`
+- the strongest family (`crit_levelgate`) improved bulk counters but still missed the target
+- the current signals still cannot separate "generally useful" from "WS-critical"
+
+Most likely improvement direction:
+
+- tie controller credit to demand-side stall reduction, not only prefetch usefulness
+- estimate a prefetch's opportunity cost under shared pressure, not only its local success rate
+- add conflict/victim awareness so a candidate can be rejected even if it is locally useful
+- score per-core marginal WS gain before spending shared budget on that core
+
+In short: the next step should still be a meta-controller, but it needs a better proxy for
+**critical demand service**, not another round of confidence-only or rank-only gating.
+
+## 5. Manual
+
+This is the exact workflow that reproduced the corrected Phase 1C campaign.
+
+### 5.1 Workspace layout
+
+Use one isolated workspace per family, both locally and remotely. In this cycle the layout was:
+
+- local main repo: `/Users/shinkijun/Developers/ChampSim` for report updates and `crit_confgate`
+- local family workspaces:
+  - `/Users/shinkijun/Developers/ChampSim_crit_blacklist`
+  - `/Users/shinkijun/Developers/ChampSim_crit_levelgate_local`
+  - `/Users/shinkijun/Developers/ChampSim_crit_rankcap`
+  - `/Users/shinkijun/Developers/ChampSim_crit_rescuebudget`
+- remote mirrors:
+  - `~/Developers/ChampSim_crit_confgate`
+  - `~/Developers/ChampSim_crit_blacklist`
+  - `~/Developers/ChampSim_crit_levelgate`
+  - `~/Developers/ChampSim_crit_rankcap`
+  - `~/Developers/ChampSim_crit_rescuebudget`
+
+This avoids one candidate build overwriting another candidate's generated `.csconfig`.
+
+### 5.2 Sync and build
+
+Sync each local family workspace into its matching remote workspace with `rsync`. Exclude
+generated outputs and shared trace trees:
+
+```sh
+rsync -az \
+  --exclude '.git/' \
+  --exclude 'bin/' \
+  --exclude '.csconfig/' \
+  --exclude 'results/generated/' \
+  --exclude 'traces/' \
+  --exclude 'vcpkg/' \
+  --exclude 'vcpkg_installed/' \
+  --exclude 'test/' \
+  /Users/shinkijun/Developers/ChampSim_crit_levelgate_local/ \
+  office-kijun:~/Developers/ChampSim_crit_levelgate/
 ```
 
-This heuristic is the policy function that OpenEvolve will later replace with an evolved
-expression.
+Build from full configs only. Do not use overlay configs.
 
-### 5.3 Extended Trace Suite for OpenEvolve Fitness Function
+Also, when launching many builds remotely, use `bash -lc` with `while read -r ...`; do not rely on
+naive `zsh` word splitting for grouped specs. The latter caused a real mis-build earlier.
 
-Establish IPC baselines on a 4–5 trace suite spanning compute-bound to memory-bound workloads
-(e.g., bzip2, mcf, lbm, gcc, astar) to provide a multi-workload fitness signal for evolution.
-A single-trace fitness function risks overfitting the evolved policy to mcf's pathological
-pattern.
+Template:
 
----
+```sh
+ssh office-kijun 'bash -lc "
+cd ~/Developers/ChampSim_crit_levelgate
+while read -r cfg bin expect; do
+  make configclean >/dev/null
+  ./config.sh \"$cfg\" >/dev/null
+  rg -n \"$expect\" .csconfig/core_inst.cc.inc
+  make -j16 \"bin/$bin\"
+done <<EOF
+configs/gsp_headgate_crit_levelgate_c3_config.json champsim_gsp_headgate_crit_levelgate_c3 spp_gsp_headgate_crit_levelgate_c3
+configs/gsp_headgate_crit_levelgate_c3_4core.json champsim_gsp_headgate_crit_levelgate_c3_4core spp_gsp_headgate_crit_levelgate_c3
+EOF
+"'
+```
 
-## Appendix: Simulation Configuration
+Before trusting a run, verify both:
 
-| Parameter | Value |
-|-----------|-------|
-| Simulator | ChampSim (upstream, March 2026) |
-| CPU | 1 core, OoO, 352-entry ROB, 128-entry LQ, 72-entry SQ |
-| L1D | 64 sets × 12 ways, 5-cycle latency |
-| L2C | 1024 sets × 8 ways, 10-cycle latency, **SPP prefetcher** |
-| LLC | 2048 sets × 16 ways, 20-cycle latency, no prefetcher, LRU replacement |
-| DRAM | DDR4-3200, 1 channel, 8 bankgroups × 4 banks, tCAS/tRCD/tRP = 24 |
-| bzip2 trace | 401.bzip2-226B (DPC-3), 1M warmup + 5M simulation |
-| mcf trace | 429.mcf-51B (DPC-3), 10M warmup + 50M simulation |
-| FDP epoch size | 500 demand-LOAD triggers per epoch |
-| FDP levels | 5 levels (pf_threshold ∈ {80, 60, 25, 15, 5}) |
+- the expected prefetcher name appears in `.csconfig/core_inst.cc.inc`
+- the raw output log banner matches the intended variant
+
+### 5.3 Run order
+
+Use only short runs:
+
+- `--warmup-instructions 1000000`
+- `--simulation-instructions 3000000`
+
+Run order:
+
+1. refresh `orig_lbm_1M3M` and `orig_4xlbm_1M3M`
+2. run each candidate on `1c lbm`
+3. keep only candidates that preserve `1c lbm`
+4. run those candidates on `4 x lbm`
+5. open `mcf + lbm` only if a candidate actually beats `orig` on `4 x lbm`
+
+### 5.4 Fetch and summarize
+
+Fetch the final remote campaign directories back locally. Ignore temporary fetch directories such as
+`*_partial`; those were intermediate copies only and should not be used for final analysis.
+
+Use the extractor scripts in `scripts/`:
+
+```sh
+python3 scripts/extract_single_core_metrics.py \
+  --inputs results/generated/phase1c_cycle23_fetch/*/results/generated/phase1c_cycle23/cycle*_lbm_1M3M.txt \
+  --out-csv results/generated/phase1c_cycle23_fetch/cycle23_single.csv
+
+python3 scripts/extract_multicore_metrics.py \
+  --single-core-baselines results/generated/phase1c_cycle23_fetch/cycle23_single.csv \
+  --inputs \
+    results/generated/phase1c_cycle1_fetch/cycle1_crit_*_4xlbm_1M3M.txt \
+    results/generated/phase1c_cycle23_fetch/*/results/generated/phase1c_cycle23/cycle*_4xlbm_1M3M.txt \
+    results/generated/phase1c_cycle1_fetch/orig_4xlbm_1M3M.txt \
+    results/generated/phase1c_cycle1_fetch/orig_mcf_lbm_1M3M.txt \
+  --out-csv results/generated/phase1c_cycle23_fetch/cycle23_multi.csv
+```
+
+For this report, the authoritative final summaries are:
+
+- `results/generated/phase1c_cycle23_fetch/cycle23_single.csv`
+- `results/generated/phase1c_cycle23_fetch/cycle23_multi.csv`

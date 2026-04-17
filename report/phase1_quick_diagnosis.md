@@ -1,13 +1,11 @@
 # Phase 1 Quick Diagnosis
 ## Short-Window Exploratory Rerun (`1M` warmup / `5M` simulation)
 
-This note is a quick-scale restart of the Phase 1 analysis. It does **not** replace the longer `50M` / `20M` results in [phase1.md](/Users/shinkijun/Developers/ChampSim/report/phase1.md). The goal here is narrower:
+This note is a quick-scale restart of the Phase 1 analysis. It does **not** replace the longer `50M` / `20M` results in [phase1.md](/Users/shinkijun/Developers/ChampSim/report/phase1.md). It should also be read as an exploratory note rather than the final authoritative rerun summary. The goal here is narrower:
 
 - add `473.astar` as a **single-core-only** midpoint workload,
 - rerun only the **existing WS mixes** (`mcf+lbm`, `4×lbm`) at short scale,
 - quantify where the current logic fails before implementing a new controller.
-
-All new outputs for this pass live under `results/quick/`.
 
 ## Quick Experiment Setup
 
@@ -22,12 +20,7 @@ All new outputs for this pass live under `results/quick/`.
 - Phase C WS mix:
   - `4×lbm`: `orig`, `fdp`, `bwc`
 
-Primary quick outputs:
-
-- [results/quick/phase_a_single_core_metrics.csv](/Users/shinkijun/Developers/ChampSim/results/quick/phase_a_single_core_metrics.csv)
-- [results/quick/phase_b_mcf_lbm_2core_metrics.csv](/Users/shinkijun/Developers/ChampSim/results/quick/phase_b_mcf_lbm_2core_metrics.csv)
-- [results/quick/phase_c_lbm_4core_metrics.csv](/Users/shinkijun/Developers/ChampSim/results/quick/phase_c_lbm_4core_metrics.csv)
-- [results/quick/phase_strategy_gsp_metrics.csv](/Users/shinkijun/Developers/ChampSim/results/quick/phase_strategy_gsp_metrics.csv)
+The durable conclusions from this exploratory pass are folded into the follow-up reports rather than into a collection of batch artifacts.
 
 ## `astar` Single-Core Classification
 

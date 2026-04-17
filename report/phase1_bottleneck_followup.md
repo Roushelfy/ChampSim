@@ -1,178 +1,226 @@
 # Phase 1 Bottleneck Follow-up
-## Astar Expansion And Weighted-Speedup Diagnosis
+## Astar Expansion, Fair Reruns, And Weighted-Speedup Diagnosis
 
-This note extends the current Phase 1 benchmark suite with `473.astar` and follows up on the central question from the proposal: why does the current hand-designed throttling logic fail to move weighted speedup consistently?
+This note refines the original Phase 1 diagnosis after two additional steps:
 
-The current evidence points to two distinct regimes rather than one generic "bandwidth problem":
+1. extending the workload set with `473.astar`, and
+2. rerunning the short-window experiments after fixing a config-drift issue in the early `gsp_*` comparisons.
 
-1. `mcf`-like latency-bound runs regress because throttling removes useful prefetch side-effects at DRAM, especially row-buffer locality.
-2. `lbm`-like symmetric throughput-bound runs are not being throttled by BWC because the controller only samples pressure once at the epoch boundary, which can miss short-lived but important congestion spikes.
+The goal here is to keep only the parts that survived the fair reruns:
 
-This report therefore treats the WS problem as a workload-classification problem rather than a single tuning bug.
+- what algorithms were tried,
+- what actually happened when they ran,
+- what bottleneck was observed quantitatively,
+- and what that says about the next design iteration.
 
-## 1. Updated Workload Spectrum
+## 1. Workload Roles
 
-The original single-core suite already spanned:
+The current short-window suite still spans three useful behavior classes:
 
-- `401.bzip2`: compute-bound, light memory pressure.
-- `429.mcf`: latency-bound pointer chasing with near-zero useful prefetch accuracy.
-- `470.lbm`: high-MLP streaming behavior with bandwidth sensitivity.
+- `429.mcf`: latency-bound, near-zero prefetch accuracy, extremely fragile to over-throttling
+- `470.lbm`: high-throughput streaming case, useful for studying symmetric shared pressure
+- `473.astar`: a midpoint workload that is still stall-dominated but has nontrivial prefetch utility
 
-`473.astar` is added here as the mid-spectrum case. The exploratory `SPP_Orig` run already showed that it is not simply another copy of either `mcf` or `lbm`:
+For the fair short-window `orig` runs (`1M` warmup + `5M` simulation), the anchor behavior is:
 
-- IPC: `0.1301`
-- Demand stall: `94.07%` of cycles
-- PF accuracy: `2.87%`
-- L1D miss latency: `241` cycles
-- AVG DBUS congested: `11.58`
+| Workload | IPC | PF Accuracy | Demand Stall % | DBUS | Row-Hit Rate |
+|----------|-----|-------------|----------------|------|--------------|
+| `mcf` | `0.09305` | `0.0157%` | `95.90%` | `7.552` | about `0.14%` |
+| `astar` | `0.1161` | `3.73%` | `94.95%` | `9.038` | about `2.6%` |
+| `lbm` | `0.8684` | `4.99%` | `78.55%` | `7.479` | about `6.3%` |
 
-These numbers place `astar` between `mcf` and `lbm` in prefetch usefulness and miss latency, while remaining heavily demand-stall dominated.
+The main classification result remains intact:
 
-## 2. Quantitative Bottleneck Diagnosis
+- `astar` is still much closer to `mcf` than to `bzip2` in stall behavior,
+- but unlike `mcf`, it does have some real prefetch utility,
+- which makes it a good discriminator for whether a controller understands utility instead of just aggressiveness.
 
-### 2.1 `mcf`: latency and row-buffer assistance dominate
+## 2. Algorithms Tried
 
-The strongest existing single-core negative result remains `mcf`.
+Three controller ideas matter for the current diagnosis:
 
-Compared with `SPP_Orig`, both FDP and BWC reduce or suppress prefetch traffic without improving throughput:
+1. `BWC`
+   - local bandwidth-aware throttling with an accuracy fallback
+2. `c1_gsp_tiered`
+   - the same base controller plus shared-pressure tiers meant to catch symmetric congestion
+3. `gsp_util`
+   - `c1_gsp_tiered` plus a light signature-utility filter that only engages under shared pressure
 
-- `SPP_Orig`: IPC `0.1212`, demand stall `387,318,696` cycles, L1D miss latency `139.4`, L2C miss latency `185.2`
-- `SPP_FDP`: IPC `0.1165`, demand stall `403,966,767` cycles, L1D miss latency `148.2`, L2C miss latency `197.7`
-- `SPP_BWC`: IPC `0.1164`, demand stall `404,329,876` cycles, L1D miss latency `148.3`, L2C miss latency `197.8`
+Two negative exploratory branches were also informative:
 
-The key quantitative signal is not average queue occupancy. It is the loss of row-buffer locality:
+- `c2_mc_prefprio`
+  - demand-over-prefetch scheduling at the DRAM controller
+- `c3_sigutil`
+  - an earlier, more aggressive signature utility filter that penalized too early
 
-- `SPP_Orig` RQ row-buffer hits: `6,802`
-- `SPP_FDP` RQ row-buffer hits: `3,769`
-- `SPP_BWC` RQ row-buffer hits: `3,784`
+Those two side branches were useful as diagnosis, but they are not the direction to keep.
 
-That is roughly a `44%` hit-rate collapse after throttling. At the same time:
+## 3. Verified Single-Core Results
 
-- LLC miss latency is almost unchanged (`219.8` vs `219.6/219.7`)
-- demand stall cycles increase by about `4.3%`
-- L1D/L2C miss latency rises by about `6-7%`
+### 3.1 `mcf`
 
-The conclusion is that `mcf` is not primarily bottlenecked by sustained average queue fullness. It is bottlenecked by serialized demand latency, and the current throttles destroy one of the few accidental latency-hiding mechanisms still helping the workload.
+| Policy | IPC | Delta vs `orig` | PF Issued | DBUS | Demand Stall |
+|--------|-----|-----------------|-----------|------|--------------|
+| `orig` | `0.09305` | baseline | `516,895` | `7.552` | `51,530,306` |
+| `bwc` | `0.09048` | `-2.76%` | `131,593` | `8.078` | `53,039,075` |
+| `c1_gsp_tiered` | `0.09048` | `-2.76%` | `131,593` | `8.078` | `53,039,075` |
+| `gsp_util` | `0.09305` | `0.00%` | `516,895` | `7.552` | `51,530,306` |
 
-### 2.2 `astar`: mid-spectrum case under evaluation
+Quantitatively, the `mcf` bottleneck is now very clear:
 
-The full `astar` single-core matrix is used to classify whether `astar` behaves more like:
+- `bwc` / `c1_gsp_tiered` cut prefetch volume by `74.5%`
+- DRAM `RQ row-buffer hit` falls from `846` to `501` (`-40.8%`)
+- `Demand Stall Cycles` increase by `2.93%`
+- `AVG DBUS CONGESTED CYCLE` increases by `6.97%`
+- `avg_epoch_mshr_util` stays at only `0.0376`
+- `max_epoch_mshr_util` is only `0.46875`
 
-- a milder `mcf`-style latency-bound case,
-- a lower-coverage `lbm`-style streaming case, or
-- a distinct mixed regime where prefetch filtering and bandwidth-aware throttling should both matter.
+So the controller is not reacting to sustained queue pressure. It is reacting mostly to the low-accuracy escape hatch, and that destroys a small but real row-buffer / latency benefit that `mcf` was getting from otherwise inaccurate prefetches.
 
-The final classification table below is filled from the new canonical single-core batch:
+`gsp_util` is important here even though it does not improve IPC. On single-core `mcf`, it does the right thing by **not interfering**:
 
-| Workload | Policy | IPC | PF Accuracy | Demand Stall % | L1D MPKI | L2C MPKI | LLC MPKI | L1D Lat | L2C Lat | LLC Lat | DBUS | Row-Hit Rate |
-|----------|--------|-----|-------------|----------------|----------|----------|----------|---------|---------|---------|------|--------------|
-| `mcf` | `orig` | 0.1212 | 0.015% | 93.90 | 156.01 | 158.10 | 87.71 | 139.4 | 185.2 | 219.8 | 7.753 | 0.157% |
-| `astar` | `orig` | 0.1301 | 2.87% | 94.07 | 96.58 | 101.52 | 66.00 | 241.0 | 306.8 | 329.8 | 11.58 | 2.356% |
-| `lbm` | `orig` | 0.8482 | 5.08% | 79.06 | 51.17 | 89.70 | 48.36 | 319.5 | 547.1 | 637.0 | 7.524 | 6.583% |
-| `bzip2` | `orig` | 2.146 | 5.18% | 26.92 | 2.67 | 5.67 | 2.24 | 82.5 | 130.9 | 154.0 | 2.908 | 16.740% |
+- `issue_period=1`
+- `enabled_epochs=0`
+- `filtered_prefetches=0`
 
-The completed `astar` policy sweep sharpens the classification:
+That is a meaningful correction over plain `bwc`.
 
-| Policy | IPC | Delta vs `orig` | PF Accuracy | Demand Stall % | L1D MPKI | L2C MPKI | LLC MPKI | L1D Lat | L2C Lat | LLC Lat | DBUS | Row-Hit Rate |
-|--------|-----|-----------------|-------------|----------------|----------|----------|----------|---------|---------|---------|------|--------------|
-| `no_pref` | 0.1250 | -3.92% | 0.00% | 94.32 | 98.81 | 61.86 | 57.66 | 250.9 | 313.6 | 319.3 | 12.10 | 2.310% |
-| `orig` | 0.1301 | baseline | 2.87% | 94.07 | 96.58 | 101.52 | 66.00 | 241.0 | 306.8 | 329.8 | 11.58 | 2.356% |
-| `fdp` | 0.1259 | -3.23% | 4.61% | 94.27 | 97.05 | 81.91 | 58.58 | 247.5 | 313.7 | 323.8 | 12.08 | 2.438% |
-| `bwc` | 0.1255 | -3.54% | 5.74% | 94.29 | 97.49 | 69.58 | 58.51 | 248.7 | 312.9 | 322.3 | 12.05 | 2.403% |
-| `bop` | 0.1369 | +5.23% | 0.00% | 93.75 | 96.90 | 80.60 | 67.54 | 234.5 | 292.2 | 339.9 | 9.856 | 2.114% |
+### 3.2 `astar`
 
-Three conclusions follow:
+| Policy | IPC | Delta vs `orig` | PF Issued | DBUS | Demand Stall |
+|--------|-----|-----------------|-----------|------|--------------|
+| `orig` | `0.1161` | baseline | `287,628` | `9.038` | `40,892,633` |
+| `c1_gsp_tiered` | `0.1146` | `-1.29%` | `81,728` | `9.308` | `41,465,125` |
+| `gsp_util` | `0.1161` | `0.00%` | `287,628` | `9.038` | `40,892,633` |
 
-- `astar` is much closer to the memory-stall-heavy end of the spectrum than to `bzip2`: its demand-stall fraction (`94.07%`) is essentially as high as `mcf`, but its PF accuracy and row-hit rate are materially higher than `mcf`.
-- Within the SPP family, `orig` remains the best `astar` operating point. Both `fdp` and `bwc` increase measured PF accuracy, but they still reduce IPC by `3.2-3.5%` and raise DBUS pressure, which means their extra filtering is reducing useful coverage or timeliness more than it removes harmful traffic.
-- `astar` is therefore a meaningful midpoint for this project: unlike `mcf`, it does have some prefetch utility, but like `mcf`, it is still fragile to over-throttling. That makes it a good discriminator for whether a new controller understands *utility* instead of just *aggressiveness*.
+`astar` confirms the same lesson more gently:
 
-### 2.3 2-core WS follow-up
+- pure throttling still loses performance,
+- but the utility-gated version can avoid that loss.
 
-The new 2-core experiments focus on the two most informative mixes:
+That means `astar` really is the useful midpoint we hoped it would be. It is fragile enough to punish utility-blind throttling, but not as degenerate as `mcf`.
 
-- `mcf + astar`
-- `astar + lbm`
+### 3.3 `lbm`
 
-These are intended to answer two questions:
+| Policy | IPC | Delta vs `orig` |
+|--------|-----|-----------------|
+| `orig` | `0.8684` | baseline |
+| `c1_gsp_tiered` | `0.8684` | `0.00%` |
+| `gsp_util` | `0.8684` | `0.00%` |
 
-1. Does `astar` behave as a polluter, a victim, or a mixed-role workload under contention?
-2. Does the current BWC logic preserve or sacrifice weighted speedup when the co-runner is not as extreme as `mcf` or `lbm`?
+Single-core `lbm` is effectively unchanged by the new logic in the short fair reruns.
 
-The ROI IPC-based weighted speedup for each policy is summarized after the new runs complete:
+## 4. Verified 2-Core Results
 
-| Mix | Policy | CPU0 IPC | CPU1 IPC | Weighted Speedup | Main Change Driver |
-|-----|--------|----------|----------|------------------|--------------------|
-| `mcf + astar` | `orig` | TBD | TBD | TBD | TBD |
-| `mcf + astar` | `fdp` | TBD | TBD | TBD | TBD |
-| `mcf + astar` | `bwc` | TBD | TBD | TBD | TBD |
-| `astar + lbm` | `orig` | TBD | TBD | TBD | TBD |
-| `astar + lbm` | `fdp` | TBD | TBD | TBD | TBD |
-| `astar + lbm` | `bwc` | TBD | TBD | TBD | TBD |
+### 4.1 `mcf + lbm`
 
-## 3. Why BWC Misses `4×lbm`
+| Policy | `mcf` IPC | `lbm` IPC | WS | Delta vs `orig` |
+|--------|-----------|-----------|----|-----------------|
+| `orig` | `0.03333` | `0.8163` | `1.29820` | baseline |
+| `bwc` | `0.03181` | `0.8192` | `1.28520` | `-1.00%` |
+| `c1_gsp_tiered` | `0.03181` | `0.8192` | `1.28520` | `-1.00%` |
+| `gsp_util` | `0.03173` | `0.8168` | `1.28158` | `-1.28%` |
 
-Existing `4×lbm` results already show that BWC is a no-op:
+This mix exposes the central failure mode of the current controller family:
 
-- `SPP_Orig` WS: `1.0831`
-- `SPP_BWC` WS: `1.0831`
-- all BWC controller instances stay at Level 3
+- `lbm` is preserved or slightly helped
+- `mcf` is still the core that gets sacrificed
+- weighted speedup therefore goes down
 
-The new instrumentation is meant to make the cause measurable instead of speculative:
+`c1_gsp_tiered` is identical to `bwc` here because the shared-pressure mode never actually activates in the 2-core heterogeneous case.
 
-- epoch-average L2C MSHR utilization
-- epoch-max L2C MSHR utilization
-- epoch-average LLC RQ utilization
-- epoch-max LLC RQ utilization
-- fraction of epochs whose average or peak crosses the BWC throttle thresholds
+`gsp_util` also fails to improve WS:
 
-The expected failure mode is:
+- it filters `334,744` prefetches on the `mcf` side,
+- only `10,524` on the `lbm` side,
+- and ends at `cpu0=mcf -> level 1 / issue_period 4`, `cpu1=lbm -> level 3 / issue_period 1`.
 
-- epoch-average pressure stays below threshold,
-- epoch-peak pressure crosses threshold intermittently,
-- the controller's one-shot end-of-epoch sample never sees those peaks consistently enough to throttle.
+That is still the wrong tradeoff.
 
-The final measured summary from the new `4×lbm` BWC run is inserted here:
+### 4.2 Reverse-designed `mcf + astar`
 
-| Policy | Avg Epoch MSHR | Max Epoch MSHR | Avg Epoch LLC RQ | Max Epoch LLC RQ | Frac Epoch Max MSHR >= 0.85 | Frac Epoch Max LLC RQ >= 0.80 | Interpretation |
-|--------|----------------|----------------|------------------|------------------|-----------------------------|-------------------------------|----------------|
-| `bwc_4core` | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Policy | `mcf` IPC | `astar` IPC | WS | Delta vs `orig` |
+|--------|-----------|-------------|----|-----------------|
+| `orig` | `0.08736` | `0.1014` | `1.81224` | baseline |
+| `gsp_util` | `0.08472` | `0.1025` | `1.79334` | `-1.04%` |
 
-## 4. Strategy Search: What Should Change Next?
+This was the first reverse-designed mix because it looked like the best chance to create a “trim the noisy core, protect the fragile core” case.
 
-The bottleneck study suggests that "just throttle harder" is the wrong next step. The controller must become more selective about *which* traffic to suppress and *when* to suppress it.
+What actually happened:
 
-The most promising next-step strategies are:
+- `mcf` loses about `3.0%` IPC
+- `astar` gains about `1.1%` IPC
+- net weighted speedup still falls by `1.04%`
 
-| Rank | Strategy | Why It Helps | What Changes In ChampSim | Expected WS Effect | Cost / Risk |
-|------|----------|--------------|--------------------------|--------------------|-------------|
-| 1 | Coordinated global throttling or HPAC-style control | Avoids sacrificing the wrong core and can explicitly optimize WS rather than per-core local signals | Add shared-state policy over per-core prefetchers or LLC/MC-visible congestion signals | Highest upside on `mcf+astar` and `astar+lbm` where local vs global tradeoffs matter | Medium implementation cost, medium policy complexity |
-| 2 | Demand-vs-prefetch scheduling or dropping under pressure | Targets the actual interference point without necessarily disabling useful prefetch generation | Add memory-controller or LLC queue prioritization/gating for prefetch requests | Strongest fit for `mcf`-style latency protection without fully removing row-buffer-friendly traffic | Higher implementation cost; may require deeper simulator plumbing |
-| 3 | Better SPP-side utility filtering than confidence thresholds | Attacks the FDP failure mode directly: confidence is not utility | Add learned or heuristic utility filter ahead of issue/fill decisions | Likely most helpful for `astar`-like mixed regimes and for reducing harmful high-confidence noise | Lower hardware complexity, but benefit may be smaller than shared-resource-aware control |
+So even on a deliberately chosen mix, the controller still sacrifices the fragile latency-bound core.
 
-Concrete paper evidence that supports this ranking:
+No verified reverse-designed positive WS case has been found yet.
 
-- `HPAC` adds global interference feedback on top of local FDP-like control. The original MICRO 2009 paper reports `23%` system-performance improvement over always-aggressive prefetching and `14%` over local-only FDP on an 8-core system, with `17%` lower bus traffic. That maps directly to our current failure mode: per-core throttling can look locally sensible while still making the wrong global WS tradeoff.
-- `Prefetch-Aware Shared Resource Management` extends the same idea deeper into the shared memory system. The ISCA 2011 paper shows that once memory schedulers and throttling policies become aware of prefetch traffic, performance improves by about `11%` on 4-core systems across three different resource-management schemes while also improving fairness. This is strong evidence that a WS-oriented controller should couple prefetch control with shared-resource management rather than leaving the prefetcher isolated.
-- `Prefetch-Aware DRAM Controller (PADC)` is especially relevant for the `mcf` diagnosis. The MICRO 2008 paper shows that adaptively prioritizing demand versus prefetch requests and dropping likely-useless prefetches improves 4-core WS by `8.2%` and 8-core WS by `9.9%`, while reducing DRAM bandwidth use. Our `mcf` regression already points to the memory controller interface as the real contention point, so this is the cleanest next mechanism if we stay within the current SPP framework.
-- `PPF` shows why confidence-only filtering is too weak for mixed workloads. The ISCA 2019 paper replaces SPP's internal confidence throttling with a perceptron filter that keeps deeper speculation but filters inaccurate requests, improving performance by `3.78%` in 1-core and `11.4%` in 4-core experiments over the underlying SPP. That makes it a good fit for `astar`, where accuracy is low but not near-zero and the key question is utility rather than raw confidence.
-- `Puppeteer` broadens the same lesson from a single filter to a learned manager. The TACO 2022 paper reports average gains of `46.0%` in 1-core, `25.8%` in 4-core, and `11.9%` in 8-core versus no prefetching, while sharply reducing negative outliers. It is likely too large a jump for our next implementation step, but it supports the idea that online learned control can outperform fixed confidence thresholds when workload class changes over time.
+## 5. What The Bottleneck Actually Is
 
-Relevant references:
+The fair reruns reduce the project diagnosis to three clear statements.
 
-- [HPAC (MICRO 2009)](https://hps.ece.utexas.edu/pub/ebrahimi_micro09.pdf)
-- [Prefetch-Aware Shared Resource Management (ISCA 2011)](https://people.inf.ethz.ch/omutlu/pub/prefetchaware-shared-resources_isca11.pdf)
-- [Prefetch-Aware DRAM Controller (MICRO 2008)](https://people.inf.ethz.ch/omutlu/pub/prefetch-dram_micro08.pdf)
-- [Feedback Directed Prefetching (HPCA 2007)](https://hps.ece.utexas.edu/pub/TR-HPS-2006-006.pdf)
-- [Perceptron-Based Prefetch Filtering (ISCA 2019)](https://people.engr.tamu.edu/djimenez/pdfs/ppf_isca2019.pdf)
-- [Puppeteer (TACO 2022)](https://bu-icsg.github.io/publications/2022/puppeteer_taco_2022.pdf)
+### 5.1 `mcf` is a latency-protection problem, not an average-pressure problem
 
-## 5. Interim Takeaway
+What hurts `mcf` is not high average queue occupancy. It is the loss of accidental latency help:
 
-The current evidence already supports a sharper project narrative:
+- row-buffer warm-up,
+- miss overlap,
+- and other timing benefits that are not captured by prefetch accuracy.
 
-- `mcf` does not mainly need lower average queue occupancy; it needs protection from extra effective memory latency.
-- `astar` is a better training/evaluation midpoint than `bzip2` because it is still stall-dominated but not near-zero-accuracy like `mcf`.
-- `4×lbm` does not falsify bandwidth-aware control; it shows that the current sampling method is too weak to detect symmetric saturation.
+This is the clearest reason the current BWC family fails.
 
-The remaining missing pieces are the two new 2-core WS tables and the new BWC pressure statistics for `4×lbm`.
+### 5.2 `astar` shows that utility is the right abstraction
+
+`astar` is exactly the kind of workload where confidence and accuracy are not enough:
+
+- there is some genuine prefetch value,
+- but over-throttling still loses IPC,
+- and the only controller that avoids that loss is the one that gates intervention on shared pressure.
+
+### 5.3 The current multicore logic still chooses the wrong victim
+
+Across both informative 2-core mixes:
+
+- `mcf+lbm`
+- `mcf+astar`
+
+the current controller family still protects the less fragile core and throttles the more fragile one. That is why weighted speedup remains negative even when one component IPC improves.
+
+## 6. Reflection
+
+There are two important things we got right and two important things we got wrong.
+
+What the current work got right:
+
+- the project correctly identified that confidence / accuracy alone are not the right control signals
+- `astar` was a useful workload addition and made the utility problem much easier to see
+
+What the current work got wrong:
+
+- we initially over-trusted provisional positive short-run `gsp_*` results before fixing config drift
+- we assumed that “shared pressure + lighter utility filter” would be enough by itself to move WS, but the current actuator still sacrifices the wrong core
+
+So the current contribution is strongest as a **bottleneck diagnosis**:
+
+- `mcf` needs latency protection, not blunt traffic suppression
+- `4x lbm` needs shared-pressure sensing plus a more selective actuator
+- reverse-designed mixes still need a controller that can explicitly avoid wrong-core sacrifice
+
+## 7. Next Design Implication
+
+The next step should not be “throttle harder.”
+
+It should be a more selective intervention that can:
+
+- preserve the row-buffer / timeliness help that fragile workloads still get,
+- prune only traffic with genuinely low utility under shared pressure,
+- and avoid treating the most latency-sensitive core as the default victim.
+
+That makes the most promising next mechanisms:
+
+1. gentler utility discrimination before issue
+2. a narrower shared-resource intervention that only deprioritizes clearly negative-utility prefetch traffic
+3. a controller that reasons about system outcome rather than only local per-core state
+
+The main project risk is no longer “we do not know why WS is flat.” We now know why. The remaining challenge is turning that diagnosis into a controller that can act selectively enough to create a real WS gain.

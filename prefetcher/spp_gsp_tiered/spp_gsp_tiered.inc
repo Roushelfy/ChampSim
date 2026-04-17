@@ -11,8 +11,10 @@ constexpr std::size_t BWC_MAX_TRACKED_CPUS = 16;
 
 std::array<bool, BWC_MAX_TRACKED_CPUS> shared_cpu_active{};
 std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_accuracy{};
-std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_mshr_util{};
-std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_llc_rq_util{};
+std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_avg_mshr_util{};
+std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_max_mshr_util{};
+std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_avg_llc_rq_util{};
+std::array<double, BWC_MAX_TRACKED_CPUS> shared_last_max_llc_rq_util{};
 
 struct shared_bwc_snapshot {
   std::size_t active_cores = 0;
@@ -23,15 +25,17 @@ struct shared_bwc_snapshot {
   double max_llc_rq_util = 0.0;
 };
 
-void publish_shared_epoch_state(std::size_t cpu, double accuracy, double mshr_util, double llc_rq_util)
+void publish_shared_epoch_state(std::size_t cpu, double accuracy, double avg_mshr_util, double max_mshr_util, double avg_llc_rq_util, double max_llc_rq_util)
 {
   if (cpu >= BWC_MAX_TRACKED_CPUS)
     return;
 
   shared_cpu_active[cpu] = true;
   shared_last_accuracy[cpu] = accuracy;
-  shared_last_mshr_util[cpu] = mshr_util;
-  shared_last_llc_rq_util[cpu] = llc_rq_util;
+  shared_last_avg_mshr_util[cpu] = avg_mshr_util;
+  shared_last_max_mshr_util[cpu] = max_mshr_util;
+  shared_last_avg_llc_rq_util[cpu] = avg_llc_rq_util;
+  shared_last_max_llc_rq_util[cpu] = max_llc_rq_util;
 }
 
 shared_bwc_snapshot snapshot_shared_epoch_state(double low_accuracy_threshold)
@@ -43,10 +47,10 @@ shared_bwc_snapshot snapshot_shared_epoch_state(double low_accuracy_threshold)
       continue;
 
     ++snapshot.active_cores;
-    snapshot.avg_mshr_util += shared_last_mshr_util[cpu];
-    snapshot.avg_llc_rq_util += shared_last_llc_rq_util[cpu];
-    snapshot.max_mshr_util = std::max(snapshot.max_mshr_util, shared_last_mshr_util[cpu]);
-    snapshot.max_llc_rq_util = std::max(snapshot.max_llc_rq_util, shared_last_llc_rq_util[cpu]);
+    snapshot.avg_mshr_util += shared_last_avg_mshr_util[cpu];
+    snapshot.avg_llc_rq_util += shared_last_avg_llc_rq_util[cpu];
+    snapshot.max_mshr_util = std::max(snapshot.max_mshr_util, shared_last_max_mshr_util[cpu]);
+    snapshot.max_llc_rq_util = std::max(snapshot.max_llc_rq_util, shared_last_max_llc_rq_util[cpu]);
     snapshot.any_low_accuracy = snapshot.any_low_accuracy || (shared_last_accuracy[cpu] < low_accuracy_threshold);
   }
 
@@ -145,15 +149,20 @@ uint32_t spp_bwc::prefetcher_cache_operate(champsim::address addr, champsim::add
         champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
+          const bool fill_l2 = confidence_q[i] >= fill_threshold;
+
           // BWC rate limiter: gate BEFORE FILTER.check() (which is a combined check-and-set).
           // Skipping after FILTER.check() would mark the address as prefetched without issuing.
-          if (bwc_should_issue()) {
-            if (FILTER.check(pf_addr, ((confidence_q[i] >= fill_threshold) ? spp_bwc::SPP_L2C_PREFETCH : spp_bwc::SPP_LLC_PREFETCH))) {
-              prefetch_line(pf_addr, (confidence_q[i] >= fill_threshold), 0); // Use addr (not base_addr) to obey the same physical page boundary
+          if (fill_l2 && !utility_allows_prefetch(curr_sig)) {
+            ++utility_prefetch_filtered;
+          } else if (bwc_should_issue()) {
+            if (FILTER.check(pf_addr, (fill_l2 ? spp_bwc::SPP_L2C_PREFETCH : spp_bwc::SPP_LLC_PREFETCH))) {
+              prefetch_line(pf_addr, fill_l2, 0); // Use addr (not base_addr) to obey the same physical page boundary
 
               ++fdp_epoch_pf_issued; // BWC: count ALL issued prefetches (LLC + L2C) for accuracy tracking
 
-              if (confidence_q[i] >= fill_threshold) {
+              if (fill_l2) {
+                utility_record_prefetch(pf_addr, curr_sig);
                 GHR.pf_issued++; // GHR only counts L2C fills (unchanged; used for global_accuracy)
                 if (GHR.pf_issued > GLOBAL_COUNTER_MAX) {
                   GHR.pf_issued >>= 1;
@@ -259,6 +268,14 @@ void spp_bwc::prefetcher_final_stats()
             << " frac_epoch_avg_llc_rq_ge_thresh=" << frac_epoch_avg_llc_rq_ge_thresh
             << " frac_epoch_max_llc_rq_ge_thresh=" << frac_epoch_max_llc_rq_ge_thresh
             << std::endl;
+  if constexpr (SPP_BWC_ENABLE_SIG_UTIL) {
+    std::cout << "[SIG_UTIL] cpu=" << intern_->cpu
+              << " enabled_epochs=" << utility_filter_enabled_epochs
+              << " filtered_prefetches=" << utility_prefetch_filtered
+              << " useful_updates=" << utility_useful_updates
+              << " useless_updates=" << utility_useless_updates
+              << std::endl;
+  }
 }
 
 void spp_bwc::record_pressure_sample()
@@ -282,6 +299,10 @@ void spp_bwc::finalize_pressure_epoch()
 
   const double avg_epoch_mshr_util = pressure_epoch_mshr_sum / static_cast<double>(pressure_epoch_sample_count);
   const double avg_epoch_llc_rq_util = pressure_epoch_llc_rq_sum / static_cast<double>(pressure_epoch_sample_count);
+  pressure_last_epoch_avg_mshr_util = avg_epoch_mshr_util;
+  pressure_last_epoch_max_mshr_util = pressure_epoch_mshr_max;
+  pressure_last_epoch_avg_llc_rq_util = avg_epoch_llc_rq_util;
+  pressure_last_epoch_max_llc_rq_util = pressure_epoch_llc_rq_max;
 
   ++pressure_epoch_count;
   pressure_epoch_avg_mshr_sum += avg_epoch_mshr_util;
@@ -313,18 +334,19 @@ bool spp_bwc::bwc_should_issue()
 
 void spp_bwc::bwc_update_epoch()
 {
-  if (fdp_epoch_pf_issued == 0)
-    return;
-
-  const double mshr_util = intern_->get_mshr_occupancy_ratio();
-  const double llc_rq_util =
-      static_cast<double>(intern_->lower_level->rq_occupancy()) /
-      static_cast<double>(intern_->lower_level->rq_size());
-  const double accuracy = static_cast<double>(fdp_epoch_pf_useful) /
-                          static_cast<double>(fdp_epoch_pf_issued);
-  publish_shared_epoch_state(intern_->cpu, accuracy, mshr_util, llc_rq_util);
+  const double avg_mshr_util = pressure_last_epoch_avg_mshr_util;
+  const double max_mshr_util = pressure_last_epoch_max_mshr_util;
+  const double avg_llc_rq_util = pressure_last_epoch_avg_llc_rq_util;
+  const double max_llc_rq_util = pressure_last_epoch_max_llc_rq_util;
+  const bool epoch_has_prefetch = (fdp_epoch_pf_issued > 0);
+  const double accuracy = epoch_has_prefetch
+                              ? (static_cast<double>(fdp_epoch_pf_useful) / static_cast<double>(fdp_epoch_pf_issued))
+                              : 1.0;
+  publish_shared_epoch_state(intern_->cpu, accuracy, avg_mshr_util, max_mshr_util, avg_llc_rq_util, max_llc_rq_util);
 
   const auto shared = snapshot_shared_epoch_state(BWC_ACC_LOW_THROTTLE);
+  const double shared_avg_pressure = std::max(shared.avg_mshr_util, shared.avg_llc_rq_util);
+  const double shared_max_pressure = std::max(shared.max_mshr_util, shared.max_llc_rq_util);
   max_global_avg_mshr_util = std::max(max_global_avg_mshr_util, shared.avg_mshr_util);
   max_global_max_mshr_util = std::max(max_global_max_mshr_util, shared.max_mshr_util);
   max_global_avg_llc_rq_util = std::max(max_global_avg_llc_rq_util, shared.avg_llc_rq_util);
@@ -332,17 +354,38 @@ void spp_bwc::bwc_update_epoch()
   current_global_avg_mshr_util = shared.avg_mshr_util;
   current_global_avg_llc_rq_util = shared.avg_llc_rq_util;
 
+  const bool local_pressure_high =
+      avg_llc_rq_util > BWC_THROTTLE_LLC_RQ || max_llc_rq_util > BWC_THROTTLE_LLC_RQ ||
+      avg_mshr_util > BWC_THROTTLE_MSHR || max_mshr_util > BWC_THROTTLE_MSHR;
+  const bool local_pressure_low =
+      avg_llc_rq_util < BWC_ACCEL_LLC_RQ && max_llc_rq_util < BWC_THROTTLE_LLC_RQ &&
+      avg_mshr_util < BWC_ACCEL_MSHR && max_mshr_util < BWC_THROTTLE_MSHR;
   const bool symmetric_pressure_mode =
       shared.active_cores >= BWC_SYMMETRIC_MIN_CORES &&
       !shared.any_low_accuracy &&
-      shared.avg_mshr_util >= BWC_SYMMETRIC_MSHR_AVG;
+      shared_avg_pressure >= BWC_SYMMETRIC_MSHR_AVG;
+  const bool shared_pressure_active =
+      shared.active_cores >= 2 &&
+      (shared_avg_pressure >= BWC_SYMMETRIC_MSHR_AVG || shared_max_pressure >= BWC_SYMMETRIC_MSHR_AVG);
 
-  if (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR
-      || accuracy < BWC_ACC_LOW_THROTTLE) {
-    // Throttle: queue pressure too high OR accuracy near-zero (e.g. pointer-chasing)
+  utility_filter_enabled = false;
+  if constexpr (SPP_BWC_ENABLE_SIG_UTIL) {
+    utility_filter_enabled = local_pressure_high || shared_pressure_active;
+    if (utility_filter_enabled) {
+      ++utility_filter_enabled_epochs;
+    }
+  }
+
+  bool should_throttle = local_pressure_high;
+  if constexpr (SPP_BWC_ENABLE_SIG_UTIL) {
+    should_throttle = should_throttle || (epoch_has_prefetch && shared_pressure_active && accuracy < BWC_ACC_LOW_THROTTLE);
+  } else {
+    should_throttle = should_throttle || (epoch_has_prefetch && accuracy < BWC_ACC_LOW_THROTTLE);
+  }
+
+  if (should_throttle) {
     if (fdp_level > 1) --fdp_level;
-  } else if (llc_rq_util < BWC_ACCEL_LLC_RQ && mshr_util < BWC_ACCEL_MSHR
-             && accuracy > FDP_ACC_HIGH) {
+  } else if (epoch_has_prefetch && local_pressure_low && accuracy > FDP_ACC_HIGH) {
     if (fdp_level < 5) ++fdp_level;
   }
 
@@ -354,11 +397,11 @@ void spp_bwc::bwc_update_epoch()
       ++symmetric_mode_epoch_count;
 
       if constexpr (SPP_BWC_ENABLE_TIERED_GLOBAL) {
-        if (shared.avg_mshr_util >= BWC_TIER3_MSHR_AVG) {
+        if (shared_avg_pressure >= BWC_TIER3_MSHR_AVG) {
           ++symmetric_tier3_epoch_count;
           bwc_issue_period = std::max(bwc_issue_period, BWC_TIER2_ISSUE_PERIOD);
           pf_threshold = std::max(pf_threshold, BWC_TIER3_PF_THRESHOLD);
-        } else if (shared.avg_mshr_util >= BWC_TIER2_MSHR_AVG) {
+        } else if (shared_avg_pressure >= BWC_TIER2_MSHR_AVG) {
           ++symmetric_tier2_epoch_count;
           bwc_issue_period = std::max(bwc_issue_period, BWC_TIER2_ISSUE_PERIOD);
         } else {
@@ -375,15 +418,96 @@ void spp_bwc::bwc_update_epoch()
     std::cout << "[BWC] epoch: issued=" << fdp_epoch_pf_issued
               << " useful=" << fdp_epoch_pf_useful
               << " acc=" << accuracy
-              << " mshr_util=" << mshr_util
-              << " llc_rq_util=" << llc_rq_util
+              << " avg_mshr_util=" << avg_mshr_util
+              << " max_mshr_util=" << max_mshr_util
+              << " avg_llc_rq_util=" << avg_llc_rq_util
+              << " max_llc_rq_util=" << max_llc_rq_util
               << " shared_avg_mshr=" << shared.avg_mshr_util
               << " shared_max_mshr=" << shared.max_mshr_util
               << " level=" << fdp_level
               << " pf_thresh=" << pf_threshold
               << " symmetric_mode=" << symmetric_pressure_mode
+              << " utility_filter=" << utility_filter_enabled
               << " issue_period=" << bwc_issue_period << "\n";
   }
+}
+
+bool spp_bwc::utility_allows_prefetch(uint32_t signature) const
+{
+  if constexpr (!SPP_BWC_ENABLE_SIG_UTIL) {
+    return true;
+  }
+
+  if (!utility_filter_enabled) {
+    return true;
+  }
+
+  const auto idx = get_hash(signature) % SIG_UTIL_TABLE_SIZE;
+  const auto& entry = utility_table.at(idx);
+  return !entry.valid || entry.tag != signature || entry.score >= 0;
+}
+
+void spp_bwc::utility_record_prefetch(champsim::address addr, uint32_t signature)
+{
+  if constexpr (!SPP_BWC_ENABLE_SIG_UTIL) {
+    return;
+  }
+
+  const auto idx = get_hash(champsim::block_number{addr}.to<uint64_t>()) % SIG_UTIL_TABLE_SIZE;
+  pending_prefetch_table.at(idx) = pending_prefetch_entry{true, champsim::block_number{addr}, signature};
+}
+
+void spp_bwc::utility_record_useful(champsim::address addr)
+{
+  if constexpr (!SPP_BWC_ENABLE_SIG_UTIL) {
+    return;
+  }
+
+  const auto line = champsim::block_number{addr};
+  const auto idx = get_hash(line.to<uint64_t>()) % SIG_UTIL_TABLE_SIZE;
+  auto& entry = pending_prefetch_table.at(idx);
+  if (!entry.valid || entry.line != line) {
+    return;
+  }
+
+  utility_update_score(entry.signature, SIG_UTIL_USEFUL_DELTA);
+  entry.valid = false;
+  ++utility_useful_updates;
+}
+
+void spp_bwc::utility_record_useless(champsim::address addr)
+{
+  if constexpr (!SPP_BWC_ENABLE_SIG_UTIL) {
+    return;
+  }
+
+  const auto line = champsim::block_number{addr};
+  const auto idx = get_hash(line.to<uint64_t>()) % SIG_UTIL_TABLE_SIZE;
+  auto& entry = pending_prefetch_table.at(idx);
+  if (!entry.valid || entry.line != line) {
+    return;
+  }
+
+  utility_update_score(entry.signature, SIG_UTIL_USELESS_DELTA);
+  entry.valid = false;
+  ++utility_useless_updates;
+}
+
+void spp_bwc::utility_update_score(uint32_t signature, int delta)
+{
+  if constexpr (!SPP_BWC_ENABLE_SIG_UTIL) {
+    return;
+  }
+
+  const auto idx = get_hash(signature) % SIG_UTIL_TABLE_SIZE;
+  auto& entry = utility_table.at(idx);
+  if (!entry.valid || entry.tag != signature) {
+    entry.valid = true;
+    entry.tag = signature;
+    entry.score = 0;
+  }
+
+  entry.score = std::clamp(entry.score + delta, SIG_UTIL_SCORE_MIN, SIG_UTIL_SCORE_MAX);
 }
 
 // TODO: Find a good 64-bit hash function
@@ -697,6 +821,7 @@ bool spp_bwc::PREFETCH_FILTER::check(champsim::address check_addr, FILTER_REQUES
   case spp_bwc::L2C_DEMAND:
     if ((remainder_tag[quotient] == remainder) && (useful[quotient] == 0)) {
       useful[quotient] = 1;
+      _parent->utility_record_useful(check_addr);
       if (valid[quotient]) {
         _parent->GHR.pf_useful++; // This cache line was prefetched by SPP and actually used in the program
         ++_parent->fdp_epoch_pf_useful; // BWC epoch counter: tracks useful prefetches this epoch
@@ -712,8 +837,11 @@ bool spp_bwc::PREFETCH_FILTER::check(champsim::address check_addr, FILTER_REQUES
 
   case spp_bwc::L2C_EVICT:
     // Decrease global pf_useful counter when there is a useless prefetch (prefetched but not used)
-    if (valid[quotient] && !useful[quotient] && _parent->GHR.pf_useful)
-      _parent->GHR.pf_useful--;
+    if (valid[quotient] && !useful[quotient]) {
+      _parent->utility_record_useless(check_addr);
+      if (_parent->GHR.pf_useful)
+        _parent->GHR.pf_useful--;
+    }
 
     // Reset filter entry
     valid[quotient] = 0;

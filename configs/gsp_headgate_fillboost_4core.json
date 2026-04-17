@@ -1,0 +1,6 @@
+{
+  "executable_name": "champsim_gsp_headgate_fillboost_4core",
+  "L2C": {
+    "prefetcher": "spp_gsp_headgate_fillboost"
+  }
+}
