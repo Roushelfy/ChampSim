@@ -189,6 +189,14 @@ struct spp_bwc : public champsim::modules::prefetcher {
   static constexpr double BWC_THROTTLE_MSHR   = 0.85;
   static constexpr double BWC_ACCEL_LLC_RQ    = 0.30;
   static constexpr double BWC_ACCEL_MSHR      = 0.50;
+  static constexpr bool   BWC_ENABLE_SYMMETRIC_SATURATION = false;
+  static constexpr double BWC_SYM_THROTTLE_LLC_RQ = 0.60;
+  static constexpr double BWC_SYM_THROTTLE_MSHR   = 0.60;
+  static constexpr double BWC_SYM_ACCEL_LLC_RQ    = 0.35;
+  static constexpr double BWC_SYM_ACCEL_MSHR      = 0.35;
+  static constexpr double BWC_SYM_ACCEL_ACC       = 0.05;
+  static constexpr uint32_t BWC_CONGESTED_EPOCHS  = 2;
+  static constexpr uint32_t BWC_RELAXED_EPOCHS    = 3;
   // Accuracy-based fallback: throttle if accuracy is near-zero (catches pointer-chasing)
   static constexpr double BWC_ACC_LOW_THROTTLE = 0.01; // < 1% useful → throttle regardless of queue pressure
 
@@ -196,6 +204,8 @@ struct spp_bwc : public champsim::modules::prefetcher {
   uint64_t fdp_epoch_pf_issued = 0;
   uint64_t fdp_epoch_pf_useful = 0;
   int      fdp_level           = 3;
+  uint32_t bwc_congested_epochs = 0;
+  uint32_t bwc_relaxed_epochs   = 0;
 
   // Lookup tables indexed by fdp_level (1-based; index 0 is unused padding)
   static constexpr uint32_t FDP_PF_THRESH[6]    = {0, 80, 60, 25, 15,  5};

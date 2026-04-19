@@ -164,10 +164,34 @@ uint32_t spp_bwc::prefetcher_cache_fill(champsim::address addr, long set, long w
 
 void spp_bwc::prefetcher_final_stats()
 {
-  std::cout << "[BWC] Final level=" << fdp_level
+  std::cout << "[BWC_LOCAL] cpu=" << intern_->cpu
+            << " variant_tag=BWC_LOCAL"
+            << " Final level=" << fdp_level
             << " pf_threshold=" << pf_threshold
             << " fill_threshold=" << fill_threshold
-            << " issue_period=" << bwc_issue_period << std::endl;
+            << " issue_period=" << bwc_issue_period
+            << " symmetric_saturation=" << (BWC_ENABLE_SYMMETRIC_SATURATION ? "on" : "off")
+            << " symmetric_mode_epochs=0"
+            << " symmetric_tier1_epochs=0"
+            << " symmetric_tier2_epochs=0"
+            << " symmetric_tier3_epochs=0"
+            << " max_global_avg_mshr_util=0"
+            << " max_global_max_mshr_util=0"
+            << " max_global_avg_llc_rq_util=0"
+            << " max_global_max_llc_rq_util=0"
+            << " pressure_mode=local"
+            << std::endl;
+  std::cout << "[BWC_PRESSURE] cpu=" << intern_->cpu
+            << " epochs=0"
+            << " avg_epoch_mshr_util=0"
+            << " max_epoch_mshr_util=0"
+            << " avg_epoch_llc_rq_util=0"
+            << " max_epoch_llc_rq_util=0"
+            << " frac_epoch_avg_mshr_ge_thresh=0"
+            << " frac_epoch_max_mshr_ge_thresh=0"
+            << " frac_epoch_avg_llc_rq_ge_thresh=0"
+            << " frac_epoch_max_llc_rq_ge_thresh=0"
+            << std::endl;
 }
 
 bool spp_bwc::bwc_should_issue()
@@ -186,14 +210,33 @@ void spp_bwc::bwc_update_epoch()
       static_cast<double>(intern_->lower_level->rq_size());
   const double accuracy = static_cast<double>(fdp_epoch_pf_useful) /
                           static_cast<double>(fdp_epoch_pf_issued);
+  const bool immediate_throttle = (accuracy < BWC_ACC_LOW_THROTTLE);
+  const bool hard_congestion =
+      (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR);
+  const bool symmetric_congestion = BWC_ENABLE_SYMMETRIC_SATURATION &&
+      (llc_rq_util > BWC_SYM_THROTTLE_LLC_RQ || mshr_util > BWC_SYM_THROTTLE_MSHR);
+  const bool immediate_accel =
+      (llc_rq_util < BWC_ACCEL_LLC_RQ && mshr_util < BWC_ACCEL_MSHR && accuracy > FDP_ACC_HIGH);
+  const bool symmetric_relief = BWC_ENABLE_SYMMETRIC_SATURATION &&
+      (llc_rq_util < BWC_SYM_ACCEL_LLC_RQ && mshr_util < BWC_SYM_ACCEL_MSHR && accuracy > BWC_SYM_ACCEL_ACC);
 
-  if (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR
-      || accuracy < BWC_ACC_LOW_THROTTLE) {
-    // Throttle: queue pressure too high OR accuracy near-zero (e.g. pointer-chasing)
+  if (BWC_ENABLE_SYMMETRIC_SATURATION) {
+    bwc_congested_epochs = symmetric_congestion ? (bwc_congested_epochs + 1) : 0;
+    bwc_relaxed_epochs   = symmetric_relief ? (bwc_relaxed_epochs + 1) : 0;
+  } else {
+    bwc_congested_epochs = 0;
+    bwc_relaxed_epochs   = 0;
+  }
+
+  if (immediate_throttle || hard_congestion || bwc_congested_epochs >= BWC_CONGESTED_EPOCHS) {
+    // Throttle on near-zero accuracy, hard queue pressure, or sustained symmetric saturation.
     if (fdp_level > 1) --fdp_level;
-  } else if (llc_rq_util < BWC_ACCEL_LLC_RQ && mshr_util < BWC_ACCEL_MSHR
-             && accuracy > FDP_ACC_HIGH) {
+    bwc_congested_epochs = 0;
+    bwc_relaxed_epochs   = 0;
+  } else if (immediate_accel || bwc_relaxed_epochs >= BWC_RELAXED_EPOCHS) {
     if (fdp_level < 5) ++fdp_level;
+    bwc_congested_epochs = 0;
+    bwc_relaxed_epochs   = 0;
   }
 
   pf_threshold     = FDP_PF_THRESH[fdp_level];
@@ -206,6 +249,8 @@ void spp_bwc::bwc_update_epoch()
               << " acc=" << accuracy
               << " mshr_util=" << mshr_util
               << " llc_rq_util=" << llc_rq_util
+              << " congested_epochs=" << bwc_congested_epochs
+              << " relaxed_epochs=" << bwc_relaxed_epochs
               << " level=" << fdp_level
               << " pf_thresh=" << pf_threshold
               << " issue_period=" << bwc_issue_period << "\n";
@@ -560,7 +605,7 @@ void spp_bwc::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t pf_confide
 {
   // NOTE: GHR implementation is slightly different from the original paper
   // Instead of matching (last_offset + delta), GHR simply stores and matches the pf_offset
-  uint32_t min_conf = 100, victim_way = MAX_GHR_ENTRY;
+  uint32_t min_conf = UINT32_MAX, victim_way = MAX_GHR_ENTRY;
 
   if constexpr (SPP_DEBUG_PRINT) {
     std::cout << "[GHR] Crossing the page boundary pf_sig: " << std::hex << pf_sig << std::dec;
@@ -584,9 +629,14 @@ void spp_bwc::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t pf_confide
       return;
     }
 
+    if (!valid[i] && victim_way >= MAX_GHR_ENTRY) {
+      victim_way = i;
+      continue;
+    }
+
     // GHR replacement policy is based on the stored confidence value
     // An entry with the lowest confidence is selected as a victim
-    if (confidence[i] < min_conf) {
+    if (valid[i] && confidence[i] < min_conf) {
       min_conf = confidence[i];
       victim_way = i;
     }
