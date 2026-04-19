@@ -1,0 +1,17 @@
+{
+  "acc_low_throttle": 0.01,
+  "candidate_id": "seed",
+  "congested_epochs": 2,
+  "global_llc_t1": 0.3,
+  "global_llc_t2": 0.38,
+  "global_llc_t3": 0.44,
+  "global_mshr_t1": 0.3,
+  "global_mshr_t2": 0.38,
+  "global_mshr_t3": 0.44,
+  "min_active_cores": 4,
+  "pressure_mode": "avg+max",
+  "relaxed_epochs": 3,
+  "tier1_issue_period": 2,
+  "tier2_issue_period": 4,
+  "tier3_pf_threshold": 60
+}

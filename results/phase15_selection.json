@@ -1,0 +1,25 @@
+{
+  "qualified_polluters": [
+    "astar"
+  ],
+  "qualified_victims": [
+    "gemsfdtd",
+    "lbm",
+    "leslie3d"
+  ],
+  "ratios": {
+    "astar": 0.9803063457330415,
+    "gemsfdtd": 1.387076438140268,
+    "lbm": 1.4092041867419836,
+    "leslie3d": 2.000821692686935,
+    "mcf": 1.0421324161650902,
+    "omnetpp": 1.091699604743083
+  },
+  "selected_polluter": "astar",
+  "selected_victim": "gemsfdtd",
+  "selected_victims_4core": [
+    "gemsfdtd",
+    "leslie3d",
+    "lbm"
+  ]
+}
