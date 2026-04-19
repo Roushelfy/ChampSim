@@ -23,6 +23,13 @@ Source-of-truth note:
 ## multicore
 Collected multicore output logs (`2core`/`4core`).
 
+## phase15
+Phase 1.5 screening and multicore logs:
+- `screening/` stores the new `no_pref` / `orig` single-core candidate runs.
+- `multicore/` stores the selected 2-core and 4-core nominal/stress runs.
+- `manifest.csv` records the workload order for each Phase 1.5 multicore log.
+- `run_phase15_batch.sh` now redirects both stdout and stderr into each log, so failed runs can be distinguished from incomplete ones during extraction.
+
 ## misc
 Legacy/debug/alternate-run logs kept for reference.
 

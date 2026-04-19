@@ -1,6 +1,21 @@
 # Phase 1 Progress Report — Syncup #1
-## OpenEvolve-Optimized Bandwidth-Aware Prefetcher Throttling in ChampSim
+## OpenEvolve-Optimized SPP Controller Evolution in ChampSim
 ### 15-740 Computer Architecture · Spring 2026
+
+---
+
+## 0. April 17 Scope Update
+
+The project has since narrowed to a cleaner mainline:
+
+- final-report scope is now **SPP only**
+- `bwc_local` remains the hand-designed baseline
+- `gsp_tiered_seed` is the OpenEvolve seed family
+- the temporary local OpenEvolve-compatible harness has been retired from the main workflow
+- the official OpenEvolve repo is now the only search entrypoint
+
+So this document should now be read as the historical Phase 1 diagnosis that motivated the
+controller-evolution direction, not as the final execution methodology.
 
 ---
 
@@ -222,46 +237,36 @@ pressure signals is required. This is precisely the gap our bandwidth-aware cont
 
 ---
 
-## 5. Next Steps (Week 3)
+## 5. Current Mainline After Phase 1.5
 
-### 5.1 Microarchitectural Signal Instrumentation
+### 5.1 What Changed
 
-Instrument the following signals inside ChampSim, accessible from the SPP prefetcher callback:
+Phase 1.5 and the subsequent code merge reshaped the project in three important ways:
 
-| Signal | Source in ChampSim | Rationale |
-|--------|-------------------|-----------|
-| L2C MSHR occupancy | `CACHE::MSHR.occupancy` (at L2C) | Proxy for L2C miss pressure |
-| LLC MSHR occupancy | `CACHE::MSHR.occupancy` (at LLC) | Second-level pressure indicator |
-| DRAM RQ fill level | `MEMORY_CONTROLLER::RQ.occupancy` | Direct bandwidth pressure signal |
-| SPP-issued rate | Existing `fdp_epoch_pf_issued` | Absolute bandwidth consumed by prefetcher |
+1. The practical comparison set converged to `orig / fdp / bwc_local / gsp_tiered_seed`.
+2. The best diagnostic mixes became heterogeneous and near-symmetric multicore mixes rather
+   than a single single-core pathology.
+3. The OpenEvolve path migrated from a local bootstrap harness to the official
+   `algorithmicsuperintelligence/openevolve` repository.
 
-These signals are sampled at each epoch boundary and constitute the feature vector passed to
-the throttling policy function.
+### 5.2 Current Experimental Story
 
-### 5.2 Bandwidth-Aware Controller Prototype
+The main narrative now is:
 
-Replace `fdp_update_epoch()` with a new `bwc_update_epoch()` function that takes the above
-feature vector and maps it to a throttle level. The initial implementation will be a
-hand-coded heuristic to establish correctness before OpenEvolve optimization:
+- **Phase 1**: accuracy-based throttling is insufficient; mcf exposes why.
+- **Phase 1.5**: hand-designed BWC can help on some mixes but remains brittle.
+- **Current step**: evolve the `gsp_tiered_seed` controller family with official OpenEvolve
+  while keeping predictor logic fixed.
 
-```
-if (dram_rq_util > 0.75 OR mshr_l2c_util > 0.80):
-    decrease aggressiveness level
-elif (dram_rq_util < 0.30 AND mshr_l2c_util < 0.40 AND accuracy > FDP_ACC_HIGH):
-    increase aggressiveness level
-else:
-    hold current level
-```
+The search space is deliberately narrow: global-pressure thresholds, tier floors,
+hysteresis, and minimum-active-core gating.
 
-This heuristic is the policy function that OpenEvolve will later replace with an evolved
-expression.
+### 5.3 Immediate Next Steps
 
-### 5.3 Extended Trace Suite for OpenEvolve Fitness Function
-
-Establish IPC baselines on a 4–5 trace suite spanning compute-bound to memory-bound workloads
-(e.g., bzip2, mcf, lbm, gcc, astar) to provide a multi-workload fitness signal for evolution.
-A single-trace fitness function risks overfitting the evolved policy to mcf's pathological
-pattern.
+- Freeze official nominal baselines on the fixed train/validation manifests.
+- Run an OpenEvolve pilot on the `train` profile.
+- Keep only complete long-run results for the final report.
+- Use stress calibration only as a post-search validation layer, not as the primary search loop.
 
 ---
 
