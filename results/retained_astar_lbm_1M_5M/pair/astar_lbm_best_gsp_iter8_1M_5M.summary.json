@@ -1,0 +1,67 @@
+{
+  "binary": "./bin/champsim_gsp_tiered_2core",
+  "controller_lines": [
+    "[BWC_GSP_TIERED] cpu=0 candidate_id=iter8_runway_relief_higher_thresholds_1M_5M pressure_mode=avg low_acc_mode=any low_acc_override_tier=2 acc_low_throttle=0.01 local_runway_mshr=0.65 local_runway_llc_rq=0.18 burst_activation_gap=0.1 local_throttle_patience=2 local_relief_patience=1 global_mshr_t1=0.3 global_mshr_t2=0.38 global_mshr_t3=0.46 global_llc_t1=0.3 global_llc_t2=0.38 global_llc_t3=0.46 tier1_issue_period=2 tier2_issue_period=4 tier3_pf_threshold=60 min_active_cores=2 congested_epochs=3 relaxed_epochs=2",
+    "[BWC_GSP_TIERED] cpu=0 candidate_id=iter8_runway_relief_higher_thresholds_1M_5M pressure_mode=avg low_acc_mode=any low_acc_override_tier=2 acc_low_throttle=0.01 local_runway_mshr=0.65 local_runway_llc_rq=0.18 burst_activation_gap=0.1 local_throttle_patience=2 local_relief_patience=1 global_mshr_t1=0.3 global_mshr_t2=0.38 global_mshr_t3=0.46 global_llc_t1=0.3 global_llc_t2=0.38 global_llc_t3=0.46 tier1_issue_period=2 tier2_issue_period=4 tier3_pf_threshold=60 min_active_cores=2 congested_epochs=3 relaxed_epochs=2",
+    "[BWC_GSP_TIERED] cpu=1 candidate_id=iter8_runway_relief_higher_thresholds_1M_5M variant_tag=BWC_GSP_TIERED Final level=3 local_low_accuracy_epochs=0 local_relief_epochs=0 pf_threshold=25 fill_threshold=90 issue_period=4 burst_activation_gap=0.1 low_acc_mode=any low_acc_override_tier=2 global_mode_epochs=676 global_tier1_epochs=676 global_tier2_epochs=631 global_tier3_epochs=8 max_global_avg_mshr_util=0.46875 max_global_max_mshr_util=0.5 max_global_avg_llc_rq_util=0.03125 max_global_max_llc_rq_util=0.03125 pressure_mode=avg",
+    "[BWC_PRESSURE] cpu=1 epochs=1158 avg_epoch_mshr_util=0.381949 max_epoch_mshr_util=0.5 avg_epoch_llc_rq_util=0.000475759 max_epoch_llc_rq_util=0.125 frac_epoch_avg_mshr_ge_thresh=0.953368 frac_epoch_max_mshr_ge_thresh=0.954231 frac_epoch_avg_llc_rq_ge_thresh=0 frac_epoch_max_llc_rq_ge_thresh=0",
+    "[BWC_GSP_TIERED] cpu=0 candidate_id=iter8_runway_relief_higher_thresholds_1M_5M variant_tag=BWC_GSP_TIERED Final level=3 local_low_accuracy_epochs=0 local_relief_epochs=0 pf_threshold=25 fill_threshold=90 issue_period=1 burst_activation_gap=0.1 low_acc_mode=any low_acc_override_tier=2 global_mode_epochs=40 global_tier1_epochs=40 global_tier2_epochs=34 global_tier3_epochs=7 max_global_avg_mshr_util=0.46875 max_global_max_mshr_util=0.5 max_global_avg_llc_rq_util=0.046875 max_global_max_llc_rq_util=0.09375 pressure_mode=avg",
+    "[BWC_PRESSURE] cpu=0 epochs=392 avg_epoch_mshr_util=0.0374379 max_epoch_mshr_util=0.5 avg_epoch_llc_rq_util=0.000394292 max_epoch_llc_rq_util=0.125 frac_epoch_avg_mshr_ge_thresh=0.0816327 frac_epoch_max_mshr_ge_thresh=0.0918367 frac_epoch_avg_llc_rq_ge_thresh=0 frac_epoch_max_llc_rq_ge_thresh=0"
+  ],
+  "cycles": [
+    103877859,
+    6053832
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.344342641749334,
+    "rq_row_buffer_hit": 192950,
+    "rq_row_buffer_miss": 2455497
+  },
+  "env": {},
+  "instructions": [
+    5000004,
+    5000000
+  ],
+  "ipcs": [
+    0.04813,
+    0.8259
+  ],
+  "json_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_1kv_5ueg.json",
+  "label": "",
+  "llc_miss": [
+    450487,
+    3171233
+  ],
+  "log_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_tapj_9mu.txt",
+  "pf_accuracy": [
+    0.030770018103773646,
+    0.04105964805849925
+  ],
+  "pf_issued": [
+    156321,
+    3441822
+  ],
+  "pf_useful": [
+    4810,
+    141320
+  ],
+  "resolved_workloads": [
+    "astar",
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    0.41455159821472143,
+    0.9510563904599999
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "./traces/473.astar-359B.champsimtrace.xz",
+    "./traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": 1.3656079886747214,
+  "workloads": [
+    "astar",
+    "lbm"
+  ]
+}

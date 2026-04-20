@@ -1,0 +1,51 @@
+{
+  "binary": "./bin/champsim_orig",
+  "controller_lines": [
+    "[SPP_ORIG] pf_threshold=25 fill_threshold=90"
+  ],
+  "cycles": [
+    43065856
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 9.037746291458976,
+    "rq_row_buffer_hit": 10160,
+    "rq_row_buffer_miss": 373936
+  },
+  "env": {},
+  "instructions": [
+    5000004
+  ],
+  "ipcs": [
+    0.1161
+  ],
+  "json_path": "results/quick_astar_lbm/validation_1M_5M/single_core/orig_astar_1M_5M.json",
+  "label": "orig_astar_1M_5M",
+  "llc_miss": [
+    405794
+  ],
+  "log_path": "results/quick_astar_lbm/validation_1M_5M/single_core/orig_astar_1M_5M.log",
+  "pf_accuracy": [
+    0.037322513802550514
+  ],
+  "pf_issued": [
+    287628
+  ],
+  "pf_useful": [
+    10735
+  ],
+  "resolved_workloads": [
+    "astar"
+  ],
+  "retention_vs_orig": [
+    null
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "./traces/473.astar-359B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": null,
+  "workloads": [
+    "astar"
+  ]
+}

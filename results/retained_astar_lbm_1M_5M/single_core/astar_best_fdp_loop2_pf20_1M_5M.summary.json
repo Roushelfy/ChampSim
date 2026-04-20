@@ -1,0 +1,51 @@
+{
+  "binary": "./bin/champsim_fdp",
+  "controller_lines": [
+    "[FDP] Final level=1 pf_threshold=20 fill_threshold=85"
+  ],
+  "cycles": [
+    42917286
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 8.883615635543636,
+    "rq_row_buffer_hit": 9958,
+    "rq_row_buffer_miss": 380819
+  },
+  "env": {},
+  "instructions": [
+    5000004
+  ],
+  "ipcs": [
+    0.1165
+  ],
+  "json_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_o5lihsw_.json",
+  "label": "",
+  "llc_miss": [
+    414319
+  ],
+  "log_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_b1rs064u.txt",
+  "pf_accuracy": [
+    0.05173660114970225
+  ],
+  "pf_issued": [
+    290510
+  ],
+  "pf_useful": [
+    15030
+  ],
+  "resolved_workloads": [
+    "astar"
+  ],
+  "retention_vs_orig": [
+    null
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "./traces/473.astar-359B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": null,
+  "workloads": [
+    "astar"
+  ]
+}

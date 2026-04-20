@@ -362,8 +362,17 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
 
   if (c_sig[set]) {
     for (uint32_t way = 0; way < PT_WAY; way++) {
+      if (pf_q_tail + 1 >= delta_q.size())
+        break;
+
       local_conf = (100 * c_delta[set][way]) / c_sig[set];
-      pf_conf = depth ? (_parent->GHR.global_accuracy * c_delta[set][way] / c_sig[set] * lookahead_conf / 100) : local_conf;
+      if (depth) {
+        auto propagated_num = uint64_t(_parent->GHR.global_accuracy) * uint64_t(c_delta[set][way]) * uint64_t(lookahead_conf);
+        auto propagated_den = uint64_t(c_sig[set]) * 100u;
+        pf_conf = uint32_t((propagated_num + (propagated_den / 2)) / propagated_den);
+      } else {
+        pf_conf = local_conf;
+      }
 
       if (pf_conf >= pf_thresh) {
         confidence_q[pf_q_tail] = pf_conf;
@@ -392,7 +401,10 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
     pf_q_tail++;
 
     lookahead_conf = max_conf;
-    if (lookahead_conf >= pf_thresh)
+    uint32_t continue_thresh = pf_thresh / 2;
+    if (continue_thresh < 12)
+      continue_thresh = 12;
+    if (lookahead_conf >= continue_thresh)
       depth++;
 
     if constexpr (SPP_DEBUG_PRINT) {

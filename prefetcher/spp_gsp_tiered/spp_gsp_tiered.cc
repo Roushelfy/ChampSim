@@ -18,6 +18,8 @@ std::array<double, GSP_MAX_TRACKED_CPUS> shared_last_llc_rq_util{};
 struct shared_gsp_snapshot {
   std::size_t active_cores = 0;
   bool any_low_accuracy = false;
+  uint32_t low_accuracy_cores = 0;
+  double avg_accuracy = 0.0;
   double avg_mshr_util = 0.0;
   double max_mshr_util = 0.0;
   double avg_llc_rq_util = 0.0;
@@ -67,6 +69,23 @@ void maybe_set_pressure_mode(const char* key, spp_gsp_tiered::pressure_mode_t& m
   }
 }
 
+void maybe_set_low_accuracy_mode(const char* key, spp_gsp_tiered::low_accuracy_mode_t& mode, std::string& label)
+{
+  if (const char* raw = std::getenv(key)) {
+    const std::string value = raw;
+    if (value == "any") {
+      mode = spp_gsp_tiered::low_accuracy_mode_t::any;
+      label = "any";
+    } else if (value == "all") {
+      mode = spp_gsp_tiered::low_accuracy_mode_t::all;
+      label = "all";
+    } else if (value == "pressure" || value == "pressure_override") {
+      mode = spp_gsp_tiered::low_accuracy_mode_t::pressure_override;
+      label = "pressure";
+    }
+  }
+}
+
 void publish_shared_epoch_state(std::size_t cpu, double accuracy, double mshr_util, double llc_rq_util)
 {
   if (cpu >= GSP_MAX_TRACKED_CPUS)
@@ -87,14 +106,19 @@ shared_gsp_snapshot snapshot_shared_epoch_state(double low_accuracy_threshold)
       continue;
 
     ++snapshot.active_cores;
+    snapshot.avg_accuracy += shared_last_accuracy[cpu];
     snapshot.avg_mshr_util += shared_last_mshr_util[cpu];
     snapshot.avg_llc_rq_util += shared_last_llc_rq_util[cpu];
     snapshot.max_mshr_util = std::max(snapshot.max_mshr_util, shared_last_mshr_util[cpu]);
     snapshot.max_llc_rq_util = std::max(snapshot.max_llc_rq_util, shared_last_llc_rq_util[cpu]);
-    snapshot.any_low_accuracy = snapshot.any_low_accuracy || (shared_last_accuracy[cpu] < low_accuracy_threshold);
+    if (shared_last_accuracy[cpu] < low_accuracy_threshold) {
+      snapshot.any_low_accuracy = true;
+      ++snapshot.low_accuracy_cores;
+    }
   }
 
   if (snapshot.active_cores > 0) {
+    snapshot.avg_accuracy /= static_cast<double>(snapshot.active_cores);
     snapshot.avg_mshr_util /= static_cast<double>(snapshot.active_cores);
     snapshot.avg_llc_rq_util /= static_cast<double>(snapshot.active_cores);
   }
@@ -130,7 +154,14 @@ void spp_gsp_tiered::prefetcher_initialize()
   std::cout << "[" << VARIANT_TAG << "] cpu=" << intern_->cpu
             << " candidate_id=" << params.candidate_id
             << " pressure_mode=" << params.pressure_mode_label
+            << " low_acc_mode=" << params.low_accuracy_mode_label
+            << " low_acc_override_tier=" << params.low_accuracy_override_tier
             << " acc_low_throttle=" << params.acc_low_throttle
+            << " local_runway_mshr=" << params.local_runway_mshr
+            << " local_runway_llc_rq=" << params.local_runway_llc_rq
+            << " burst_activation_gap=" << params.burst_activation_gap
+            << " local_throttle_patience=" << params.local_throttle_patience
+            << " local_relief_patience=" << params.local_relief_patience
             << " global_mshr_t1=" << params.global_mshr_t1
             << " global_mshr_t2=" << params.global_mshr_t2
             << " global_mshr_t3=" << params.global_mshr_t3
@@ -302,13 +333,18 @@ void spp_gsp_tiered::prefetcher_final_stats()
             << " candidate_id=" << params.candidate_id
             << " variant_tag=" << VARIANT_TAG
             << " Final level=" << fdp_level
+            << " local_low_accuracy_epochs=" << local_low_accuracy_epochs
+            << " local_relief_epochs=" << local_relief_epochs
             << " pf_threshold=" << pf_threshold
             << " fill_threshold=" << fill_threshold
             << " issue_period=" << bwc_issue_period
-            << " symmetric_mode_epochs=" << symmetric_mode_epoch_count
-            << " symmetric_tier1_epochs=" << symmetric_tier1_epoch_count
-            << " symmetric_tier2_epochs=" << symmetric_tier2_epoch_count
-            << " symmetric_tier3_epochs=" << symmetric_tier3_epoch_count
+            << " burst_activation_gap=" << params.burst_activation_gap
+            << " low_acc_mode=" << params.low_accuracy_mode_label
+            << " low_acc_override_tier=" << params.low_accuracy_override_tier
+            << " global_mode_epochs=" << global_mode_epoch_count
+            << " global_tier1_epochs=" << global_tier1_epoch_count
+            << " global_tier2_epochs=" << global_tier2_epoch_count
+            << " global_tier3_epochs=" << global_tier3_epoch_count
             << " max_global_avg_mshr_util=" << max_global_avg_mshr_util
             << " max_global_max_mshr_util=" << max_global_max_mshr_util
             << " max_global_avg_llc_rq_util=" << max_global_avg_llc_rq_util
@@ -334,6 +370,11 @@ void spp_gsp_tiered::load_runtime_params()
     return;
 
   maybe_set_double("SPP_GSP_TIERED_ACC_LOW_THROTTLE", params.acc_low_throttle);
+  maybe_set_double("SPP_GSP_TIERED_LOCAL_RUNWAY_MSHR", params.local_runway_mshr);
+  maybe_set_double("SPP_GSP_TIERED_LOCAL_RUNWAY_LLC_RQ", params.local_runway_llc_rq);
+  maybe_set_double("SPP_GSP_TIERED_BURST_ACTIVATION_GAP", params.burst_activation_gap);
+  maybe_set_uint("SPP_GSP_TIERED_LOCAL_THROTTLE_PATIENCE", params.local_throttle_patience);
+  maybe_set_uint("SPP_GSP_TIERED_LOCAL_RELIEF_PATIENCE", params.local_relief_patience);
   maybe_set_double("SPP_GSP_TIERED_GLOBAL_MSHR_T1", params.global_mshr_t1);
   maybe_set_double("SPP_GSP_TIERED_GLOBAL_MSHR_T2", params.global_mshr_t2);
   maybe_set_double("SPP_GSP_TIERED_GLOBAL_MSHR_T3", params.global_mshr_t3);
@@ -346,19 +387,27 @@ void spp_gsp_tiered::load_runtime_params()
   maybe_set_uint("SPP_GSP_TIERED_MIN_ACTIVE_CORES", params.min_active_cores);
   maybe_set_uint("SPP_GSP_TIERED_CONGESTED_EPOCHS", params.congested_epochs);
   maybe_set_uint("SPP_GSP_TIERED_RELAXED_EPOCHS", params.relaxed_epochs);
+  maybe_set_uint("SPP_GSP_TIERED_LOW_ACC_OVERRIDE_TIER", params.low_accuracy_override_tier);
   maybe_set_string("SPP_GSP_TIERED_CANDIDATE_ID", params.candidate_id);
   maybe_set_pressure_mode("SPP_GSP_TIERED_PRESSURE_MODE", params.pressure_mode, params.pressure_mode_label);
+  maybe_set_low_accuracy_mode("SPP_GSP_TIERED_LOW_ACC_MODE", params.low_accuracy_mode, params.low_accuracy_mode_label);
 
   params.global_mshr_t2 = std::max(params.global_mshr_t1, params.global_mshr_t2);
   params.global_mshr_t3 = std::max(params.global_mshr_t2, params.global_mshr_t3);
   params.global_llc_t2 = std::max(params.global_llc_t1, params.global_llc_t2);
   params.global_llc_t3 = std::max(params.global_llc_t2, params.global_llc_t3);
+  params.local_runway_mshr = std::clamp(params.local_runway_mshr, 0.0, 1.0);
+  params.local_runway_llc_rq = std::clamp(params.local_runway_llc_rq, 0.0, 1.0);
+  params.burst_activation_gap = std::clamp(params.burst_activation_gap, 0.0, 1.0);
+  params.local_throttle_patience = std::max(1u, params.local_throttle_patience);
+  params.local_relief_patience = std::max(1u, params.local_relief_patience);
   params.tier1_issue_period = std::max(1u, params.tier1_issue_period);
   params.tier2_issue_period = std::max(params.tier1_issue_period, params.tier2_issue_period);
   params.tier3_pf_threshold = std::clamp(params.tier3_pf_threshold, 1u, 100u);
   params.min_active_cores = std::max(1u, params.min_active_cores);
   params.congested_epochs = std::max(1u, params.congested_epochs);
   params.relaxed_epochs = std::max(1u, params.relaxed_epochs);
+  params.low_accuracy_override_tier = std::clamp(params.low_accuracy_override_tier, 1u, 3u);
   params.acc_low_throttle = std::clamp(params.acc_low_throttle, 0.0, 1.0);
 
   params_loaded = true;
@@ -461,45 +510,89 @@ void spp_gsp_tiered::bwc_update_epoch()
   const double llc_rq_util =
       static_cast<double>(intern_->lower_level->rq_occupancy()) /
       static_cast<double>(intern_->lower_level->rq_size());
+  const double peak_mshr_util = std::max(mshr_util, pressure_epoch_mshr_max);
+  const double peak_llc_rq_util = std::max(llc_rq_util, pressure_epoch_llc_rq_max);
   const double accuracy = static_cast<double>(fdp_epoch_pf_useful) /
                           static_cast<double>(fdp_epoch_pf_issued);
   const bool immediate_throttle = (accuracy < params.acc_low_throttle);
-  const bool hard_congestion = (llc_rq_util > BWC_THROTTLE_LLC_RQ || mshr_util > BWC_THROTTLE_MSHR);
+  const bool hard_congestion = (peak_llc_rq_util > BWC_THROTTLE_LLC_RQ || peak_mshr_util > BWC_THROTTLE_MSHR);
   const bool immediate_accel = (llc_rq_util < BWC_ACCEL_LLC_RQ && mshr_util < BWC_ACCEL_MSHR && accuracy > FDP_ACC_HIGH);
+  const bool runway_open = (mshr_util < params.local_runway_mshr && llc_rq_util < params.local_runway_llc_rq);
+  const bool burst_congestion =
+      (pressure_epoch_mshr_max - mshr_util >= params.burst_activation_gap) ||
+      (pressure_epoch_llc_rq_max - llc_rq_util >= params.burst_activation_gap);
 
-  publish_shared_epoch_state(intern_->cpu, accuracy, mshr_util, llc_rq_util);
+  if (immediate_throttle) {
+    ++local_low_accuracy_epochs;
+  } else {
+    local_low_accuracy_epochs = 0;
+  }
+
+  publish_shared_epoch_state(intern_->cpu, accuracy, peak_mshr_util, peak_llc_rq_util);
   const auto shared = snapshot_shared_epoch_state(params.acc_low_throttle);
   max_global_avg_mshr_util = std::max(max_global_avg_mshr_util, shared.avg_mshr_util);
   max_global_max_mshr_util = std::max(max_global_max_mshr_util, shared.max_mshr_util);
   max_global_avg_llc_rq_util = std::max(max_global_avg_llc_rq_util, shared.avg_llc_rq_util);
   max_global_max_llc_rq_util = std::max(max_global_max_llc_rq_util, shared.max_llc_rq_util);
 
-  if (immediate_throttle || hard_congestion) {
+  const bool local_throttle =
+      hard_congestion ||
+      (immediate_throttle && !runway_open && local_low_accuracy_epochs >= params.local_throttle_patience);
+
+  if (local_throttle) {
     if (fdp_level > 1)
       --fdp_level;
+    local_relief_epochs = 0;
   } else if (immediate_accel) {
-    if (fdp_level < 5)
+    ++local_relief_epochs;
+    if (local_relief_epochs >= params.local_relief_patience && fdp_level < 5) {
       ++fdp_level;
+      local_relief_epochs = 0;
+    }
+  } else {
+    local_relief_epochs = 0;
   }
 
   pf_threshold     = FDP_PF_THRESH[fdp_level];
   fill_threshold   = FDP_FILL_THRESH[fdp_level];
   bwc_issue_period = BWC_ISSUE_PERIOD[fdp_level];
 
-  const bool global_mode_eligible =
-      shared.active_cores >= params.min_active_cores &&
-      !shared.any_low_accuracy;
-  const uint32_t observed_tier =
-      global_mode_eligible ? select_global_tier(shared.avg_mshr_util, shared.max_mshr_util, shared.avg_llc_rq_util, shared.max_llc_rq_util) : 0;
+  const uint32_t pressure_tier = select_global_tier(shared.avg_mshr_util, shared.max_mshr_util, shared.avg_llc_rq_util, shared.max_llc_rq_util);
+  const bool low_accuracy_any = shared.low_accuracy_cores > 0;
+  const bool low_accuracy_all = shared.active_cores > 0 && shared.low_accuracy_cores == shared.active_cores;
+  bool global_mode_eligible = shared.active_cores >= params.min_active_cores;
+  switch (params.low_accuracy_mode) {
+  case low_accuracy_mode_t::any:
+    global_mode_eligible = global_mode_eligible && !low_accuracy_any;
+    break;
+  case low_accuracy_mode_t::all:
+    global_mode_eligible = global_mode_eligible && !low_accuracy_all;
+    break;
+  case low_accuracy_mode_t::pressure_override:
+    global_mode_eligible = global_mode_eligible && (!low_accuracy_any || pressure_tier >= params.low_accuracy_override_tier);
+    break;
+  }
+  const uint32_t observed_tier = global_mode_eligible ? pressure_tier : 0;
   const bool relaxed_epoch =
       (observed_tier == 0) &&
       (accuracy > BWC_RELIEF_ACC) &&
       (shared.avg_mshr_util < params.global_mshr_t1) &&
       (shared.avg_llc_rq_util < params.global_llc_t1);
+  const bool bursty_global_pressure =
+      observed_tier > 0 &&
+      (shared.max_mshr_util - shared.avg_mshr_util >= params.burst_activation_gap ||
+       shared.max_llc_rq_util - shared.avg_llc_rq_util >= params.burst_activation_gap);
+  const uint32_t previous_active_global_tier = active_global_tier;
 
   if (observed_tier > 0) {
-    ++global_congested_epochs;
-    global_relaxed_epochs = 0;
+    if (bursty_global_pressure && observed_tier > active_global_tier) {
+      active_global_tier = observed_tier;
+      global_congested_epochs = 0;
+      global_relaxed_epochs = 0;
+    } else {
+      ++global_congested_epochs;
+      global_relaxed_epochs = 0;
+    }
   } else if (relaxed_epoch) {
     ++global_relaxed_epochs;
     global_congested_epochs = 0;
@@ -515,21 +608,24 @@ void spp_gsp_tiered::bwc_update_epoch()
   }
 
   if (active_global_tier > 0) {
-    ++symmetric_mode_epoch_count;
+    ++global_mode_epoch_count;
 
     if (active_global_tier >= 1) {
-      ++symmetric_tier1_epoch_count;
+      ++global_tier1_epoch_count;
       bwc_issue_period = std::max(bwc_issue_period, params.tier1_issue_period);
     }
     if (active_global_tier >= 2) {
-      ++symmetric_tier2_epoch_count;
+      ++global_tier2_epoch_count;
       bwc_issue_period = std::max(bwc_issue_period, params.tier2_issue_period);
     }
     if (active_global_tier >= 3) {
-      ++symmetric_tier3_epoch_count;
+      ++global_tier3_epoch_count;
       pf_threshold = std::max(pf_threshold, params.tier3_pf_threshold);
     }
   }
+
+  if (active_global_tier != previous_active_global_tier || burst_congestion)
+    bwc_drop_counter = 0;
 
   if constexpr (SPP_DEBUG_PRINT) {
     std::cout << "[" << VARIANT_TAG << "] epoch: issued=" << fdp_epoch_pf_issued
@@ -537,10 +633,15 @@ void spp_gsp_tiered::bwc_update_epoch()
               << " acc=" << accuracy
               << " mshr_util=" << mshr_util
               << " llc_rq_util=" << llc_rq_util
+              << " peak_mshr_util=" << peak_mshr_util
+              << " peak_llc_rq_util=" << peak_llc_rq_util
               << " global_avg_mshr_util=" << shared.avg_mshr_util
               << " global_max_mshr_util=" << shared.max_mshr_util
               << " global_avg_llc_rq_util=" << shared.avg_llc_rq_util
               << " global_max_llc_rq_util=" << shared.max_llc_rq_util
+              << " low_accuracy_cores=" << shared.low_accuracy_cores
+              << " burst_congestion=" << burst_congestion
+              << " bursty_global_pressure=" << bursty_global_pressure
               << " observed_tier=" << observed_tier
               << " active_tier=" << active_global_tier
               << " congested_epochs=" << global_congested_epochs

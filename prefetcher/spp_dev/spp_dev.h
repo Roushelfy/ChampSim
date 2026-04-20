@@ -181,7 +181,7 @@ struct spp_dev : public champsim::modules::prefetcher {
   // ── FDP Static-Threshold Controller ────────────────────────────────────────
   // All fields are non-static instance members → one copy per spp_dev object
   // → one per L2C cache → zero shared state across cores in multicore builds.
-  static constexpr uint64_t FDP_EPOCH_SIZE = 500; // demand accesses triggering SPP per epoch
+  static constexpr uint64_t FDP_EPOCH_SIZE = 1000; // demand accesses triggering SPP per epoch
                                                    // NOTE: prefetcher_cache_operate is called only for
                                                    // demand LOADs (not SPP's own fills). bzip2 5M sim
                                                    // generates ~1875 such calls → ~3 epochs at 500.
@@ -194,8 +194,8 @@ struct spp_dev : public champsim::modules::prefetcher {
   int      fdp_level           = 3; // aggressiveness level [1,5]; 3 = SPP defaults
 
   // Lookup tables indexed by fdp_level (1-based; index 0 is unused padding)
-  static constexpr uint32_t FDP_PF_THRESH[6]   = {0, 80, 60, 25, 15,  5};
-  static constexpr uint32_t FDP_FILL_THRESH[6] = {0, 90, 90, 90, 75, 50};
+  static constexpr uint32_t FDP_PF_THRESH[6]   = {0, 20, 20, 20, 15,  5};
+  static constexpr uint32_t FDP_FILL_THRESH[6] = {0, 85, 85, 85, 75, 50};
 
   void fdp_update_epoch();
 

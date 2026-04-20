@@ -1,0 +1,51 @@
+{
+  "binary": "./bin/champsim_orig",
+  "controller_lines": [
+    "[SPP_ORIG] pf_threshold=25 fill_threshold=90"
+  ],
+  "cycles": [
+    5743470
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.4681448279317575,
+    "rq_row_buffer_hit": 9240,
+    "rq_row_buffer_miss": 135148
+  },
+  "env": {},
+  "instructions": [
+    5000000
+  ],
+  "ipcs": [
+    0.8706
+  ],
+  "json_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_0huyelyg.json",
+  "label": "",
+  "llc_miss": [
+    237300
+  ],
+  "log_path": "/var/folders/4k/rfqtg_0s1077f1l5n2xp7pb80000gq/T/quick_pair_eval_0zm_198y.txt",
+  "pf_accuracy": [
+    0.04889781661544538
+  ],
+  "pf_issued": [
+    324084
+  ],
+  "pf_useful": [
+    15847
+  ],
+  "resolved_workloads": [
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    null
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "./traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": null,
+  "workloads": [
+    "lbm"
+  ]
+}

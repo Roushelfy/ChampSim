@@ -200,8 +200,19 @@ struct spp_gsp_tiered : public champsim::modules::prefetcher {
     avg_or_max,
   };
 
+  enum class low_accuracy_mode_t {
+    any,
+    all,
+    pressure_override,
+  };
+
   struct controller_params {
     double acc_low_throttle      = 0.01;
+    double local_runway_mshr     = 0.55;
+    double local_runway_llc_rq   = 0.12;
+    double burst_activation_gap  = 0.06;
+    uint32_t local_throttle_patience = 2;
+    uint32_t local_relief_patience   = 1;
     double global_mshr_t1        = 0.30;
     double global_mshr_t2        = 0.38;
     double global_mshr_t3        = 0.44;
@@ -216,6 +227,9 @@ struct spp_gsp_tiered : public champsim::modules::prefetcher {
     uint32_t relaxed_epochs      = 3;
     pressure_mode_t pressure_mode = pressure_mode_t::avg_or_max;
     std::string pressure_mode_label = "avg+max";
+    low_accuracy_mode_t low_accuracy_mode = low_accuracy_mode_t::any;
+    std::string low_accuracy_mode_label = "any";
+    uint32_t low_accuracy_override_tier = 2;
     std::string candidate_id = "seed";
   };
 
@@ -226,6 +240,8 @@ struct spp_gsp_tiered : public champsim::modules::prefetcher {
   controller_params params{};
   bool params_loaded = false;
 
+  uint32_t local_low_accuracy_epochs = 0;
+  uint32_t local_relief_epochs = 0;
   uint32_t global_congested_epochs = 0;
   uint32_t global_relaxed_epochs   = 0;
   uint32_t active_global_tier      = 0;
@@ -246,10 +262,10 @@ struct spp_gsp_tiered : public champsim::modules::prefetcher {
   uint64_t pressure_epoch_avg_llc_rq_above_thresh = 0;
   uint64_t pressure_epoch_max_llc_rq_above_thresh = 0;
 
-  uint64_t symmetric_mode_epoch_count = 0;
-  uint64_t symmetric_tier1_epoch_count = 0;
-  uint64_t symmetric_tier2_epoch_count = 0;
-  uint64_t symmetric_tier3_epoch_count = 0;
+  uint64_t global_mode_epoch_count = 0;
+  uint64_t global_tier1_epoch_count = 0;
+  uint64_t global_tier2_epoch_count = 0;
+  uint64_t global_tier3_epoch_count = 0;
   double max_global_avg_mshr_util = 0.0;
   double max_global_max_mshr_util = 0.0;
   double max_global_avg_llc_rq_util = 0.0;
