@@ -202,7 +202,7 @@ uint32_t bop::prefetcher_cache_operate(champsim::address addr, champsim::address
       // Only prefetch within the same physical page (SAMEPAGE check)
       if (champsim::page_number{pf_addr} == champsim::page_number{addr}) {
         // fill_this_level=false → fill to LLC (FILL_LLC), matching DPC-3 reference
-        bool issued = prefetch_line(pf_addr, false, static_cast<uint32_t>(prefetch_offset));
+        bool issued = prefetch_line(pf_addr, false, encode_prefetch_metadata(static_cast<uint32_t>(prefetch_offset)));
         if (issued) {
           ++total_pf_issued;
           // Push the DEMAND block (not pf_addr) into DQ; it will enter rr_left

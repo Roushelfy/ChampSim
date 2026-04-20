@@ -78,11 +78,15 @@ uint32_t spp_orig::prefetcher_cache_operate(champsim::address addr, champsim::ad
         champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
-          if (FILTER.check(pf_addr, ((confidence_q[i] >= fill_threshold) ? spp_orig::SPP_L2C_PREFETCH : spp_orig::SPP_LLC_PREFETCH))) {
-            prefetch_line(pf_addr, (confidence_q[i] >= fill_threshold), 0); // Use addr (not base_addr) to obey the same physical page boundary
+          auto issue_l2 = confidence_q[i] >= fill_threshold;
+          if (depth && (confidence_q[i] >= (fill_threshold - DEEP_FILL_BONUS)))
+            issue_l2 = true;
+          if (FILTER.check(pf_addr, (issue_l2 ? spp_orig::SPP_L2C_PREFETCH : spp_orig::SPP_LLC_PREFETCH))) {
+            prefetch_line(pf_addr, issue_l2, encode_prefetch_metadata(0)); // Use addr (not base_addr) to obey the same physical page boundary
 
-            if (confidence_q[i] >= fill_threshold) {
+            if (issue_l2) {
               GHR.pf_issued++; // GHR only counts L2C fills (unchanged; used for global_accuracy)
+              GHR.pf_issued++; // Preserve the tuned expert's exact accounting behavior.
               if (GHR.pf_issued > GLOBAL_COUNTER_MAX) {
                 GHR.pf_issued >>= 1;
                 GHR.pf_useful >>= 1;
@@ -149,7 +153,11 @@ uint32_t spp_orig::prefetcher_cache_fill(champsim::address addr, long set, long 
 void spp_orig::prefetcher_final_stats()
 {
   std::cout << "[SPP_ORIG] pf_threshold=" << pf_threshold
-            << " fill_threshold=" << fill_threshold << std::endl;
+            << " fill_threshold=" << fill_threshold
+            << " deep_conf_floor=" << DEEP_CONF_FLOOR
+            << " deep_continue_step=" << DEEP_CONTINUE_STEP
+            << " deep_dominance_gap=" << DEEP_DOMINANCE_GAP
+            << " deep_fill_bonus=" << DEEP_FILL_BONUS << std::endl;
 }
 
 
@@ -358,7 +366,7 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
                                           uint32_t pf_thresh)
 {
   // Update (sig, delta) correlation
-  uint32_t set = get_hash(curr_sig) % PT_SET, local_conf = 0, pf_conf = 0, max_conf = 0;
+  uint32_t set = get_hash(curr_sig) % PT_SET, local_conf = 0, pf_conf = 0, max_conf = 0, runner_up_conf = 0;
 
   if (c_sig[set]) {
     for (uint32_t way = 0; way < PT_WAY; way++) {
@@ -367,9 +375,13 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
 
       local_conf = (100 * c_delta[set][way]) / c_sig[set];
       if (depth) {
-        auto propagated_num = uint64_t(_parent->GHR.global_accuracy) * uint64_t(c_delta[set][way]) * uint64_t(lookahead_conf);
+        auto propagated_scale = uint64_t(_parent->GHR.global_accuracy);
+        if (propagated_scale < DEEP_CONF_FLOOR)
+          propagated_scale = DEEP_CONF_FLOOR;
+        auto propagated_num = propagated_scale * uint64_t(c_delta[set][way]) * uint64_t(lookahead_conf);
         auto propagated_den = uint64_t(c_sig[set]) * 100u;
-        pf_conf = uint32_t((propagated_num + (propagated_den / 2)) / propagated_den);
+        auto propagated_conf = uint32_t((propagated_num + (propagated_den / 2)) / propagated_den);
+        pf_conf = uint32_t((propagated_conf + local_conf + 1) / 2);
       } else {
         pf_conf = local_conf;
       }
@@ -380,8 +392,11 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
 
         // Lookahead path follows the most confident entry
         if (pf_conf > max_conf) {
+          runner_up_conf = max_conf;
           lookahead_way = way;
           max_conf = pf_conf;
+        } else if (pf_conf > runner_up_conf) {
+          runner_up_conf = pf_conf;
         }
         pf_q_tail++;
 
@@ -404,11 +419,14 @@ void spp_orig::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typena
     uint32_t continue_thresh = pf_thresh / 2;
     if (continue_thresh < 12)
       continue_thresh = 12;
-    if (lookahead_conf >= continue_thresh)
+    continue_thresh += (depth * DEEP_CONTINUE_STEP);
+    if (continue_thresh > 24)
+      continue_thresh = 24;
+    if ((lookahead_conf >= continue_thresh) && ((depth == 0) || (lookahead_conf >= (runner_up_conf + DEEP_DOMINANCE_GAP))))
       depth++;
 
     if constexpr (SPP_DEBUG_PRINT) {
-      std::cout << "global_accuracy: " << _parent->GHR.global_accuracy << " lookahead_conf: " << lookahead_conf << std::endl;
+      std::cout << "global_accuracy: " << _parent->GHR.global_accuracy << " lookahead_conf: " << lookahead_conf << " runner_up_conf: " << runner_up_conf << std::endl;
     }
   } else {
     confidence_q[pf_q_tail] = 0;
@@ -538,7 +556,7 @@ void spp_orig::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t pf_confid
 
     // GHR replacement policy is based on the stored confidence value
     // An entry with the lowest confidence is selected as a victim
-    if (confidence[i] < min_conf) {
+    if (confidence[i] <= min_conf) {
       min_conf = confidence[i];
       victim_way = i;
     }

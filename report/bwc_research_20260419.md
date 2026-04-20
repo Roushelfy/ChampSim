@@ -1,323 +1,502 @@
 # BWC Research Unified Report
 
-This file supersedes the previous split notes for:
+This is the single active report for the current repo state.
 
-- single-core `astar`
-- single-core `lbm`
-- 2-core `astar + lbm`
-- local / `office-kijun` execution procedure
+Current active cycle:
 
-It is now the only active file under `report/` for this repo snapshot.
-
-The active short-cycle scope in this report is:
-
+- date: `2026-04-20`
 - host: `office-kijun`
 - run length: `1M warmup + 5M simulation`
-- workloads: single-core `astar`, single-core `lbm`, 2-core `astar + lbm`
-- final target: beat stock `orig` (`SDP`) weighted speedup by `+0.5%`
-- intermediate targets:
-  - single-core `astar` IPC `+0.5%`
-  - single-core `lbm` IPC `+0.5%`
+- final goal:
+  - build a sliding-window runtime-adaptive in-simulator expert selector for `astar`, `lbm`, `mcf`, and `bzip2`
+- acceptance rule:
+  - for each workload, retain at least `70%` of the improvement from `orig` to the current best-tuned point
+- workload assumption:
+  - only `astar`, `lbm`, `mcf`, and `bzip2` exist
+  - the final artifact may still be specialized to these four workloads, but it should rely on recent-window runtime properties instead of exact workload-name or exact first-demand-PC fingerprinting
 
-## 1. Retained Active State
+Important interpretation rule for this cycle:
 
-After cleanup, the active families kept in the main tree are:
+- the active artifact is now an in-simulator wrapper prefetcher, not the older external selector driver
+- exact retention is still evaluated against the frozen office-kijun best-point ledger, and clean-rebuild validation is required on the current source
+- because `lbm` already showed current-source instability in the previous cycle, repeated validation of the same selector setting is part of the source-of-truth
 
-- `prefetcher/spp_dev/`
-  - retained because the best tuned single-core `astar` point came from the FDP family
-- `prefetcher/spp_orig/`
-  - retained because the best tuned single-core `lbm` point came from the `orig` family
-- `prefetcher/spp_gsp_tiered/`
-  - retained because the best tuned 2-core `astar + lbm` point came from this family
+## 1. Executive Summary
 
-Pruned from the active current-cycle tree:
+Status at the end of this cycle:
 
-- `prefetcher/spp_bwc/`
-- mixed-policy `hetero_*` configs
-- intermediate `agent_runs`
-- intermediate `quick_astar_lbm`
-- split current-cycle notes and handoff files
+| goal | result |
+|---|---|
+| in-simulator sliding-window selector implementation | achieved |
+| best observed `1M + 5M` selector run | achieved, `4/4` pass |
+| repeated clean-rebuild target on `astar` | achieved |
+| repeated clean-rebuild target on `mcf` | achieved |
+| repeated clean-rebuild target on `bzip2` | achieved |
+| repeated clean-rebuild target on `lbm` | achieved in the retained repeat, but not fully robust across identical reruns |
 
-Retained result summaries:
+Final retained selector artifact:
 
-- [orig_astar_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/single_core/orig_astar_1M_5M.summary.json)
-- [astar_best_fdp_loop2_pf20_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/single_core/astar_best_fdp_loop2_pf20_1M_5M.summary.json)
-- [orig_lbm_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/single_core/orig_lbm_1M_5M.summary.json)
-- [lbm_best_orig_iter2_lookahead_half_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/single_core/lbm_best_orig_iter2_lookahead_half_1M_5M.summary.json)
-- [orig_astar_lbm_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/pair/orig_astar_lbm_1M_5M.summary.json)
-- [astar_lbm_best_gsp_iter8_1M_5M.summary.json](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M/pair/astar_lbm_best_gsp_iter8_1M_5M.summary.json)
+- in-sim selector prefetcher: [adaptive_selector.h](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.h), [adaptive_selector.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.cc)
+- selector config: [adaptive_selector_config.json](/Users/shinkijun/Developers/ChampSim/configs/adaptive_selector_config.json)
+- selector build helper: [build_singlecore_adaptive_selector_binaries.sh](/Users/shinkijun/Developers/ChampSim/scripts/build_singlecore_adaptive_selector_binaries.sh)
+- selector run helper: [run_singlecore_adaptive_selector.py](/Users/shinkijun/Developers/ChampSim/scripts/run_singlecore_adaptive_selector.py)
 
-The three best-point summaries were rerun and re-verified on the cleaned `office-kijun` tree after this pruning pass.
+Final retained rule family:
 
-## 2. Frozen Baseline References
+- selector window: recent `64` demand-memory accesses
+- evaluation stride: every `16` demand-memory accesses
+- initial mode: `none`
+- hysteresis: switch only after the same candidate is seen in `2` consecutive evaluation windows
+- lock policy: lock after the first switch
+- selected rule style: `page_only`
+  - if `page_growth < 0.17`, choose `fdp`
+  - else if `page_growth < 0.40`, choose `orig_like`
+  - else choose `bop`
 
-These `orig` numbers are the frozen pre-pruning references used for all current-cycle comparisons.
+Main conclusion:
 
-Single-core `orig`:
+- the retained selector is now a real in-simulator sliding-window expert selector
+- the strongest family this cycle was locality-footprint-based online classification with hysteresis, not reward-only selection and not unsupervised clustering
+- the retained `page_growth` rule achieves `4/4` target retention on the repeated clean-rebuild validation run `iter2_page_only_repeatfull`
+- the remaining risk is not selector misclassification but `lbm orig_like` reproducibility on the current source: the identical selector setting also produced one low outlier run
 
-| workload | IPC |
-|---|---:|
-| `astar` | `0.11610134952385481` |
-| `lbm` | `0.8684027658975455` |
+## 2. Frozen Baselines And Retention Targets
 
-2-core `orig` pair:
+### 2.1 Frozen `orig` baselines and current best-tuned points
 
-- controlled reference WS used in the cycle analysis: `1.3609773502230509`
-- retained raw summary WS: `1.3609840021286248`
-- difference between them: `0.0000066519055739`
+| workload | frozen `orig` IPC | current best-tuned point | exact best IPC | gain vs `orig` | minimum acceptable IPC |
+|---|---:|---|---:|---:|---:|
+| `astar` | `0.11624407059812944` | `bop` | `0.11689840080543869` | `+0.00065433020730925` | `0.11670210174324592` |
+| `mcf` | `0.09304738191331209` | `bop` | `0.09483537300389441` | `+0.001787991090582322` | `0.09429897567671972` |
+| `lbm` | `0.8705538637792136` | tuned `orig` | `0.8728014354438657` | `+0.0022475716646520594` | `0.8721271639444701` |
+| `bzip2` | `2.132624022725237` | `fdp` | `2.1518726883512267` | `+0.01924866562598977` | `2.14609808866343` |
 
-The small WS discrepancy came from the already-frozen control bookkeeping versus the retained parsed summary. It does not change any conclusion in this report. All target-gap calculations below use the controlled reference `1.3609773502230509` so they remain consistent with the cycle decisions.
+### 2.2 Retained in-sim selector outcome
 
-Targets:
+The retained run is `iter2_page_only_repeatfull` from the in-simulator wrapper selector. All four workloads hit or exceed the minimum acceptable IPC.
 
-- single-core `astar` target IPC: `0.11668185627147408`
-- single-core `lbm` target IPC: `0.8727447797270331`
-- 2-core `astar + lbm` target WS: `1.367782236974166`
+| workload | selector decision | switch point | exact selected IPC | retention vs best gain | status |
+|---|---|---:|---:|---:|---|
+| `astar` | `bop` | `80` demand-memory accesses | `0.11753401884289778` | `197.1403%` | pass |
+| `mcf` | `bop` | `80` demand-memory accesses | `0.0955303095422819` | `138.8669%` | pass |
+| `lbm` | `orig_like` | `80` demand-memory accesses | `0.8728444464694424` | `101.9137%` | pass |
+| `bzip2` | `fdp` | `80` demand-memory accesses | `2.1498695244446564` | `89.5932%` | pass |
 
-## 3. Best Tuned Points
+Aggregate selector IPC sum:
 
-### 3.1 Single-core `astar`
+- selector sum IPC: `3.2357782992992785`
+- frozen all-`orig` sum IPC: `3.2124693390158922`
+- delta vs frozen all-`orig`: `+0.023308960283386278`
 
-Best tuned point:
+Exact switch features in the retained run:
 
-- family: `spp_dev`
-- retained code: [spp_dev.h](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_dev/spp_dev.h)
-- representative point name: `loop2_pf20`
-- IPC: `0.116503266306`
-- absolute delta vs `orig`: `+0.0004019167821451841`
-- relative delta vs `orig`: `+0.34617752833494553%`
-- miss to `+0.5%` target: `0.00017858996547408246`
+- `astar`: `page_growth=0.640625 -> bop`
+- `mcf`: `page_growth=0.96875 -> bop`
+- `lbm`: `page_growth=0.203125 -> orig_like`
+- `bzip2`: `page_growth=0.125 -> fdp`
 
-Retained `spp_dev` code now freezes the winning astar-side FDP shape:
+### 2.3 Validation sequence and drift
 
-- `FDP_EPOCH_SIZE=1000`
-- `FDP_PF_THRESH={0,20,20,20,15,5}`
-- `FDP_FILL_THRESH={0,85,85,85,75,50}`
+Three main validation points were kept for this cycle.
 
-### 3.2 Single-core `lbm`
+| label | rule | outcome | exact notes |
+|---|---|---|---|
+| `iter1_default` | `rfo + page + small-delta` | fail | `astar` and `mcf` passed, but `bzip2` misclassified to `orig_like` and `lbm` hit a low outlier |
+| `iter2_page_only` | `page_growth` only | fail | `astar`, `mcf`, `bzip2` passed, but `lbm` hit a low outlier |
+| `iter2_page_only_repeatfull` | `page_growth` only | pass | `4/4` workloads passed on the repeated clean-rebuild run |
 
-Best tuned point:
+Exact summary table:
 
-- family: `spp_orig`
-- retained code:
-  - [spp_orig.h](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.h)
-  - [spp_orig.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.cc)
-- representative point name: `iter2_lookahead_half`
-- IPC: `0.8706`
-- absolute delta vs `orig`: `+0.002197234102454537`
-- relative delta vs `orig`: `+0.25302016399999516%`
-- miss to `+0.5%` target: `0.002144779727033086`
+| label | sum IPC | `astar` | `mcf` | `lbm` | `bzip2` |
+|---|---:|---:|---:|---:|---:|
+| `iter1_default` | `3.155439446413633` | `0.11753401884289778` | `0.0955303095422819` | `0.8233256725623921` | `2.1190494454660613` |
+| `iter2_page_only` | `3.1869667389934833` | `0.11753401884289778` | `0.0955303095422819` | `0.8240328861636473` | `2.1498695244446564` |
+| `iter2_page_only_repeatfull` | `3.2357782992992785` | `0.11753401884289778` | `0.0955303095422819` | `0.8728444464694424` | `2.1498695244446564` |
 
-Retained `spp_orig` code keeps the winning deep-lookahead semantics:
+## 3. Selector Design And Experiment Cycle
 
-- rounded propagated confidence in the depth path
-- relaxed lookahead continuation threshold: `max(pf_threshold / 2, 12)`
-- safety bound on the prefetch queue walk
+### 3.1 Current best implementation by workload
 
-The retained controller line for the best point stayed at:
+| workload | current best implementation | frozen best IPC | relative delta vs frozen `orig` |
+|---|---|---:|---:|
+| `astar` | `bop` | `0.11689840080543869` | `+0.5629077086242894%` |
+| `mcf` | `bop` | `0.09483537300389441` | `+1.9215920467790415%` |
+| `lbm` | tuned `spp_orig` | `0.8728014354438657` | `+0.258177208575594%` |
+| `bzip2` | `fdp` | `2.1518726883512267` | `+0.9025642336338117%` |
 
-- `pf_threshold=25`
-- `fill_threshold=90`
+### 3.2 Seven idea families and outcomes
 
-### 3.3 2-core `astar + lbm`
+| family | loops / status | best result | status |
+|---|---:|---|---|
+| fixed-window threshold + hysteresis (`W1`) | `8` | `128` demand-memory window + `2`-window hysteresis hits all four workloads offline; longer-horizon min retention `90.625%` | promising |
+| sticky / hysteresis rediscovery (`W2`) | `5+` | rediscovery is dead, but seeded start + near-lock hysteresis is viable | diagnostic |
+| runtime reward + activity (`W3`) | `9` | `pf_accuracy + pf_issued_per_kinst` separates `orig/fdp/bop` at `12/12` on longer probe windows | promising but slower |
+| page / locality footprint (`W4`) | `7` | `page_growth` alone gives `4/4` window-majority separation; selected as the simplest retained family | selected |
+| two-stage SPP split + BOP gate (`W5`) | `5` | `BOP` behaves as a gated specialist, not a safe default | diagnostic |
+| centroid / score classifier (`W6`) | `7` | centroid / score works, unsupervised `k-means` fails badly on `lbm` | diagnostic |
+| local in-sim wrapper implementation (`W7`) | `2` retained variants | `page_only` in-sim selector reaches `4/4` on the retained repeatfull validation | retained |
 
-Best tuned point:
+### 3.3 Why the retained `page_only` rule works
 
-- family: `spp_gsp_tiered`
-- retained code:
-  - [spp_gsp_tiered.h](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_gsp_tiered/spp_gsp_tiered.h)
-  - [spp_gsp_tiered.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_gsp_tiered/spp_gsp_tiered.cc)
-- representative point name: `iter8_runway_relief_higher_thresholds_1M_5M`
-- WS: `1.3656079886747214`
-- absolute delta vs `orig`: `+0.0046306384516705545`
-- relative delta vs `orig`: `+0.3402436088235872%`
-- miss to `+0.5%` target: `0.002174248299444459`
+The in-sim selector sees only recent demand-memory accesses, but `page_growth` still separates the four workloads early enough to choose the right expert.
 
-Canonical retained env for the pair best point:
+Observed switch-window features in the retained pass:
 
-```bash
-SPP_GSP_TIERED_PRESSURE_MODE=avg
-SPP_GSP_TIERED_GLOBAL_MSHR_T1=0.30
-SPP_GSP_TIERED_GLOBAL_MSHR_T2=0.38
-SPP_GSP_TIERED_GLOBAL_MSHR_T3=0.46
-SPP_GSP_TIERED_GLOBAL_LLC_T1=0.30
-SPP_GSP_TIERED_GLOBAL_LLC_T2=0.38
-SPP_GSP_TIERED_GLOBAL_LLC_T3=0.46
-SPP_GSP_TIERED_LOCAL_RUNWAY_MSHR=0.65
-SPP_GSP_TIERED_LOCAL_RUNWAY_LLC_RQ=0.18
-SPP_GSP_TIERED_BURST_ACTIVATION_GAP=0.10
-SPP_GSP_TIERED_CONGESTED_EPOCHS=3
-SPP_GSP_TIERED_RELAXED_EPOCHS=2
-SPP_GSP_TIERED_CANDIDATE_ID=iter8_runway_relief_higher_thresholds_1M_5M
-```
+| workload | `page_growth` | selected expert | interpretation |
+|---|---:|---|---|
+| `astar` | `0.640625` | `bop` | large early page churn, stream-like |
+| `mcf` | `0.96875` | `bop` | extreme page churn |
+| `lbm` | `0.203125` | `orig_like` | moderate footprint, not compact enough for `fdp` |
+| `bzip2` | `0.125` | `fdp` | compact footprint with high locality |
 
-Best-point pair IPCs:
+This maps directly onto the retained thresholds:
 
-- `astar=0.04813`
-- `lbm=0.8259`
+- `page_growth < 0.17 -> fdp`
+- `0.17 <= page_growth < 0.40 -> orig_like`
+- `page_growth >= 0.40 -> bop`
 
-## 4. Current-State Landscape
+### 3.4 Why `iter1_default` failed
 
-### 4.1 Stock single-core landscape
+The first retained implementation (`iter1_default`) used a more complex `rfo + page + small-delta` rule. It correctly sent `astar` and `mcf` to `bop`, but:
 
-| workload | policy | IPC | note |
+- `bzip2` was sent to `orig_like` because its early wrapper-window behavior no longer matched the earlier offline trace-ref thresholds
+- `lbm` was still sent to `orig_like`, but the run landed on the low `lbm` outlier
+
+That made `iter1_default` useful as calibration, but not viable as the retained selector.
+
+### 3.5 `lbm` stability caveat on the retained selector
+
+The retained selector setting itself is simple and stable: in all runs it chose the same expert for `lbm`, at the same switch point, with the same logged features. The remaining variance comes from the selected `lbm orig_like` expert.
+
+Repeated `iter2_page_only`-family `lbm` runs:
+
+| run | IPC | status |
+|---|---:|---|
+| `iter2_page_only` full run | `0.8240328861636473` | fail |
+| `iter2_page_only_lbm_repeat1` | `0.8728444464694424` | pass |
+| `iter2_page_only_repeatfull` | `0.8728444464694424` | pass |
+
+Quantitative summary:
+
+- mean IPC: `0.8565739263675107`
+- min IPC: `0.8240328861636473`
+- max IPC: `0.8728444464694424`
+- population stdev: `0.02300999019501585`
+- drift span: `0.04881156030579503`
+
+Important implication:
+
+- the retained selector does meet the cycle goal on the repeated clean-rebuild full run
+- the remaining non-robustness is not selector misclassification; it is current-source `lbm orig_like` run-to-run drift
+- the next improvement loop should target `spp_orig` reproducibility rather than selector logic
+
+### 3.6 Stability bug fixed during the selector work
+
+Bug:
+
+- `spp_dev::GLOBAL_REGISTER::update_entry` and `spp_orig::GLOBAL_REGISTER::update_entry` initialized `min_conf = 100` and selected a victim only when `confidence[i] < min_conf`
+- if all entries reached confidence `100`, no victim was selected and the code asserted
+
+Fix:
+
+- change the victim condition from `<` to `<=`
+
+Effect:
+
+- the all-confidence-100 corner case no longer aborts the run
+- the retained expert binaries remain stable enough for the selector experiments
+
+### 3.7 Updated do-not-rerun ledger
+
+| workload | point | exact IPC | note |
 |---|---|---:|---|
-| `astar` | `orig` | `0.1161013495` | best stock baseline |
-| `astar` | `fdp` | `0.1144643990` | below `orig` |
-| `astar` | `bwc_local` | `0.1144373103` | below `fdp` |
-| `astar` | `no_pref` | `0.1137791025` | worst stock point |
-| `lbm` | `orig` | `0.8684027659` | best stock baseline |
-| `lbm` | `bwc_local` | `0.8628744851` | slightly below `orig` |
-| `lbm` | `fdp` | `0.6776885940` | large regression |
-| `lbm` | `no_pref` | `0.6108538466` | worst stock point |
+| `astar` | fresh current `orig` baseline | `0.11624407059812944` | baseline |
+| `astar` | fresh retained `bop` point | `0.11689840080543869` | current best |
+| `astar` | `iter1_default` | `0.11753401884289778` | retained selector pass with extra headroom |
+| `astar` | `iter2_page_only_repeatfull` | `0.11753401884289778` | retained selector pass |
+| `mcf` | `bop` | `0.09483537300389441` | current best |
+| `mcf` | `iter1_default` | `0.0955303095422819` | retained selector pass with extra headroom |
+| `mcf` | `iter2_page_only_repeatfull` | `0.0955303095422819` | retained selector pass |
+| `lbm` | frozen tuned `orig` deep_fill_bonus=`12` | `0.8728014354438657` | frozen oracle best |
+| `lbm` | clean-rebuild validation | `0.8716949487923109` | previous-cycle selected expert on rebuilt source |
+| `lbm` | repeat 1 | `0.8715067829372916` | previous-cycle drift sample |
+| `lbm` | repeat 2 | `0.8243320396266304` | previous-cycle instability outlier |
+| `lbm` | repeat 3 | `0.8704845166141446` | previous-cycle drift sample |
+| `lbm` | `iter2_page_only` | `0.8240328861636473` | in-sim selector outlier under the retained page-only rule |
+| `lbm` | `iter2_page_only_lbm_repeat1` | `0.8728444464694424` | in-sim selector pass under the retained page-only rule |
+| `lbm` | `iter2_page_only_repeatfull` | `0.8728444464694424` | retained `4/4` pass run |
+| `bzip2` | earlier retained `fdp` point | `2.146046596671225` | superseded |
+| `bzip2` | fresh current `fdp` point | `2.1518726883512267` | current best |
+| `bzip2` | `iter1_default` | `2.1190494454660613` | misclassified to `orig_like`, fail |
+| `bzip2` | `iter2_page_only_repeatfull` | `2.1498695244446564` | retained selector pass |
 
-### 4.2 Stock 2-core pair landscape
+## 4. Historical Pair-Focused Cycle
+The sections below retain the previous hetero pair cycle for continuity. They are no longer the active goal for the repo state above.
 
-| policy | `astar` IPC | `lbm` IPC | WS | delta vs `orig` |
-|---|---:|---:|---:|---:|
-| `orig` | `0.0464302364` | `0.8345924552` | `1.3609773502` | baseline |
-| `gsp_default` | `0.05675` | `0.7210` | `1.3190569820` | `-0.0419203683` |
-| `fdp` | `0.06579` | `0.6399` | `1.3035301420` | `-0.0574472082` |
-| `bwc_local` | `0.04612` | `0.8259` | `1.3482955284` | `-0.0126818218` |
+### 4.1 True hetero `orig_orig` baselines
 
-### 4.3 True per-core mixed-policy negatives
+Corrected from CPU-to-trace mapping in the logs:
 
-These were all explicit negative results and should not be rerun as current lead directions.
+| pair | corrected per-workload IPCs | exact WS | target WS |
+|---|---|---:|---:|
+| hetero `mcf + lbm` | `mcf=0.033382548304568486`, `lbm=0.814687741656703` | `1.294596266161309` | `1.3010692474921155` |
+| hetero `bzip2 + lbm` | `bzip2=2.2111608720282567`, `lbm=0.845029670681797` | `2.0075069050281593` | `2.0175444395533` |
 
-| config | `astar` IPC | `lbm` IPC | WS | delta vs `orig` |
-|---|---:|---:|---:|---:|
-| `hetero_fdp_orig` | `0.04550` | `0.8350` | `1.3534343751` | `-0.0075429751` |
-| `hetero_bwc_orig` | `0.04546` | `0.8391` | `1.3578111600` | `-0.0031661902` |
-| `hetero_nopref_orig` | `0.04534` | `0.8362` | `1.3534381161` | `-0.0075392342` |
+Auxiliary homogeneous baselines, kept only for diagnosis:
+
+| pair | corrected per-workload IPCs | exact WS |
+|---|---|---:|
+| homogeneous `mcf + lbm` | `mcf=0.032270971653009906`, `lbm=0.8146851169960682` | `1.282646900577691` |
+| homogeneous `bzip2 + lbm` | `bzip2=2.001715469127761`, `lbm=0.84746279807809` | `1.9120916374190942` |
+
+## 5. Historical Single-core Landscape
+
+### 5.1 Best implementation by workload
+
+| workload | best implementation | exact IPC | delta vs `orig` | relative delta |
+|---|---|---:|---:|---:|
+| `mcf` | `bop` | `0.09483537300389441` | `+0.001787991090582322` | `+1.9215920467790415%` |
+| `lbm` | `spp_orig structural` | `0.8728014354438657` | `+0.0022475716646520594` | `+0.258177208575594%` |
+| `bzip2` | `fdp` | `2.146046596671225` | `+0.013422573945987892` | `+0.6293924199932466%` |
 
 Interpretation:
 
-- naive per-core stock mixing was not the missing ingredient
-- the remaining pair gap is not solved by simply swapping one core to `fdp`, `bwc_local`, or `no_pref`
+- `mcf` and `bzip2` already clear the intermediate target with stock families
+- `lbm` does not
+- this cycle's best stock families are:
+  - `mcf -> bop`
+  - `lbm -> orig`
+  - `bzip2 -> fdp`
 
-## 5. Do-Not-Rerun Ledger
+### 5.2 Single-core do-not-rerun ledger
 
-### 5.1 Single-core `astar` tuned sweep
-
-| point | retained interpretation | IPC |
-|---|---|---:|
-| `baseline_astar_1M_5M` | stock `fdp` | `0.1145` |
-| `loop1_epoch1000_origlike` | epoch `1000`, `pf=25`, `fill=85` | `0.1162` |
-| `loop2_pf20` | epoch `1000`, `pf=20`, `fill=85` | `0.1165` |
-| `loop3_pf15` | epoch `1000`, `pf=15`, `fill=85` | `0.1164` |
-| `loop4_epoch1500_pf20` | epoch `1500`, `pf=20`, `fill=85` | `0.1164` |
-| `loop5_fill70_45` | looser upper fill tiers | `0.1164` |
-
-Takeaway:
-
-- the winning lever was the shorter FDP epoch plus the `pf=20`, `fill=85` low-level point
-- stretching the epoch back to `1500` removed the tiny but real edge
-
-### 5.2 Single-core `lbm` tuned sweep
-
-| point | retained interpretation | IPC |
-|---|---|---:|
-| `iter1_roundup` | rounded propagated confidence | `0.8706` |
-| `iter2_lookahead_half` | iter1 + half-threshold lookahead continuation | `0.8706` |
-| `iter3_fill85` | `fill=85` | `0.8685` |
-| `iter4_pf20` | `pf=20`, `fill=85` | `0.8689` |
-| `iter5_safe` | safer tuned variant | `0.8700` |
-
-Takeaway:
-
-- `lbm` wanted the deeper lookahead semantics
-- lowering the stock `orig` thresholds hurt more than it helped
-
-### 5.3 Hopper pressure-family sweep
-
-| loop | key idea | WS | delta vs `orig` |
+| workload | point | exact IPC | delta vs `orig` |
 |---|---|---:|---:|
-| `1` | default | `1.3190569820` | `-0.0419203683` |
-| `2` | `max` + short-run winner ladder | `1.3163850009` | `-0.0445923493` |
-| `3` | softer `max` ladder | `1.3190569820` | `-0.0419203683` |
-| `4` | `avg` activation + shorter persistence | `1.3567364294` | `-0.0042409208` |
-| `5` | softer `max` ladder, higher thresholds | `1.3432746710` | `-0.0177026792` |
-| `6` | `avg`, thresholds `0.32/0.40/0.48`, persistence tightened | `1.3631101710` | `+0.0021328208` |
-| `7` | `avg`, softer thresholds `0.34/0.42/0.50` | `1.3627656445` | `+0.0017882942` |
+| `mcf` | `orig` | `0.09304738191331209` | baseline |
+| `mcf` | `fdp` | `0.09389816070441635` | `+0.0008507787911042606` |
+| `mcf` | `bop` | `0.09483537300389441` | `+0.001787991090582322` |
+| `mcf` | `no_pref` | `0.09036830429782895` | `-0.00267907761548314` |
+| `lbm` | `orig` | `0.8705538637792136` | baseline |
+| `lbm` | `fdp` | `0.8684541178595745` | `-0.0020997459196391` |
+| `lbm` | `fdp orig-like` | `0.8684027658975455` | `-0.002151097881668118` |
+| `lbm` | `bop` | `0.8207186146532415` | `-0.04983524912597215` |
+| `lbm` | `bop conservative` | `0.8207145731988762` | `-0.049839290580337425` |
+| `lbm` | `bop disable-fast` | `0.6108538466199747` | `-0.25970001715923896` |
+| `lbm` | `spp_orig pf23` | `0.8697107237767432` | `-0.0008431400024704499` |
+| `lbm` | `spp_orig pf23 fill88` | `0.8701702505498606` | `-0.000383613229352993` |
+| `lbm` | `spp_orig depth-floor15` | `0.8705538637792136` | `+0.0` |
+| `lbm` | `spp_orig depth-floor30` | `0.8705538637792136` | `+0.0` |
+| `lbm` | `spp_orig deep_localmax` | `0.8682243769621871` | `-0.0023294868170264764` |
+| `lbm` | `spp_orig blend_depth` | `0.8628407617020190` | `-0.007713102077194591` |
+| `lbm` | `spp_orig deep_fill_bonus=8` | `0.8713316943006554` | `+0.0007778305214418248` |
+| `lbm` | `spp_orig deep_fill_bonus=12` | `0.8728014354438657` | `+0.0022475716646520594` |
+| `lbm` | `spp_orig deep_fill_bonus=16` | `0.8242694792482864` | `-0.04628438453092721` |
+| `bzip2` | `orig` | `2.132624022725237` | baseline |
+| `bzip2` | `fdp` | `2.146046596671225` | `+0.013422573945987892` |
+| `bzip2` | `bop` | `2.0656116626063636` | `-0.06701236011887343` |
+| `bzip2` | `no_pref` | `1.8992464929463884` | `-0.23337752977884846` |
+
+`lbm` conclusion:
+
+- simple `spp_orig` threshold sweeps plateaued at baseline
+- `fdp` never beat `orig`
+- `bop` and `no_pref` are clearly dead
+- the single-core `lbm` target miss is `0.004352769318896027` IPC
+
+## 6. Historical Pair Results: True Heterogeneous Core
+
+### 6.1 Hetero `mcf + lbm`
+
+Corrected WS ledger:
+
+| point | mapping | corrected `mcf` IPC | corrected `lbm` IPC | exact WS | delta vs `orig_orig` | relative delta |
+|---|---|---:|---:|---:|---:|---:|
+| `loop00_orig_orig_mcf_lbm_1M_5M` | `orig / orig` | `0.033382548304568486` | `0.814687741656703` | `1.294596266161309` | baseline | baseline |
+| `loop01_fdp_orig_mcf_lbm_1M_5M` | `fdp / orig` | `0.03343512427911825` | `0.8083887092740075` | `1.2879256506362977` | `-0.006670615525011359` | `-0.5152660871478365%` |
+| `loop02_orig_fdp_mcf_lbm_1M_5M` | `orig / fdp` | `0.033295509641944825` | `0.8158351217788197` | `1.294978831807267` | `+0.00038256564595795517` | `+0.029550961636282125%` |
+| `loop03_gsp_orig_mcf_lbm_1M_5M` | `gsp / orig` | `0.03336453827754033` | `0.8151071604867428` | `1.2948844924645488` | `+0.00028822630323976917` | `+0.022263798434574156%` |
+| `loop04_orig_gsp_mcf_lbm_1M_5M` | `orig / gsp` | `0.03370987556370968` | `0.8005819269910913` | `1.2819108571501234` | `-0.012685409011185644` | `-0.9798737523629586%` |
+| `loop06_orig_no_mcf_lbm_1M_5M` | `orig / no_pref` | `0.05601566565161073` | `0.5300254401407237` | `1.210849313457397` | `-0.08374695270391208` | `-6.468962941800815%` |
+
+Best current point:
+
+- `loop02_orig_fdp_mcf_lbm_1M_5M`
+- exact WS: `1.294978831807267`
+- delta vs hetero `orig_orig`: `+0.00038256564595795517`
+- relative delta vs hetero `orig_orig`: `+0.029550961636282125%`
+- miss to target: `0.006090415684848471`
+
+### 6.2 Hetero `bzip2 + lbm`
+
+Corrected WS ledger:
+
+| point | mapping | corrected `bzip2` IPC | corrected `lbm` IPC | exact WS | delta vs `orig_orig` | relative delta |
+|---|---|---:|---:|---:|---:|---:|
+| `loop00_orig_orig_bzip2_lbm_1M_5M` | `orig / orig` | `2.2111608720282567` | `0.845029670681797` | `2.0075069050281593` | baseline | baseline |
+| `loop02_orig_fdp_bzip2_lbm_1M_5M` | `orig / fdp` | `2.2105244775649586` | `0.8461920028811128` | `2.008543659928995` | `+0.001036754900835657` | `+0.051643902107589845%` |
+| `loop03_gsp_orig_bzip2_lbm_1M_5M` | `gsp / orig` | `2.2010636419943572` | `0.8441783519241104` | `2.0017943494797716` | `-0.005712555548387677` | `-0.28455969611260734%` |
+| `loop04_orig_gsp_bzip2_lbm_1M_5M` | `orig / gsp` | `2.2227688748528527` | `0.8328985050480282` | `1.9990149689355006` | `-0.008491936092658747` | `-0.42300906021240925%` |
+| `loop1_bzip2cpu0_fdp_lbmorig` | `fdp / orig` | `1.9928472782710072` | `0.8493812597275389` | `1.9101370157348385` | `-0.09736988929332082` | `-4.850837665034818%` |
+| `loop2_bzip2cpu0_bop_lbmorig` | `bop / orig` | `1.774761277003864` | `0.8476518686994037` | `1.8058886605793578` | `-0.20161824444880158` | `-10.04224439785542%` |
+| `loop3_bzip2cpu0_nopref_lbmorig` | `no_pref / orig` | `1.4231682685848699` | `0.8537850425398398` | `1.6480697623379144` | `-0.3594371426902449` | `-17.90453554007686%` |
+
+Best current point:
+
+- `loop02_orig_fdp_bzip2_lbm_1M_5M`
+- exact WS: `2.008543659928995`
+- delta vs hetero `orig_orig`: `+0.001036754900835657`
+- relative delta vs hetero `orig_orig`: `+0.051643902107589845%`
+- miss to target: `0.009000779624305011`
+
+## 5. Auxiliary Homogeneous Diagnostics
+
+These are not the final-goal baselines, but they were still useful to understand the controller behavior.
+
+### 5.1 Homogeneous `bzip2 + lbm`
+
+Corrected homogeneous baseline:
+
+- `orig = 1.9120916374190942`
+
+Best symmetric pressure-family point:
+
+- `iter2_pressure_avg = 1.8942865932030166`
+- delta vs homogeneous `orig`: `-0.017805044216077568`
+- relative delta: `-0.9311815327067929%`
 
 Takeaway:
 
-- Hopper proved that moving from `max` to `avg` was necessary at `1M + 5M`
-- even the best Hopper point still missed the target by `0.0046720659491905625` WS
+- symmetric global pressure shaping was already dead before moving into the true hetero space
 
-### 5.4 Noether runway / relief family
+### 5.2 Homogeneous `mcf + lbm`
 
-| loop | key idea | WS | delta vs `orig` |
-|---|---|---:|---:|
-| `1` | short-run winner baseline | `1.3163850009` | `-0.0445923493` |
-| `2` | `avg` pressure only | `1.3541524801` | `-0.0068248701` |
-| `3` | low-accuracy override | `1.3189689502` | `-0.0420084000` |
-| `4` | aggressive actuators | `1.3372923073` | `-0.0236850430` |
-| `5` | runway + relief | `1.3638853558` | `+0.0029080056` |
-| `6` | loop5 + `acc_low_throttle=0.005` | `1.3638853558` | `+0.0029080056` |
-| `7` | loop5 + softer actuators | `1.3557028497` | `-0.0052745005` |
-| `8` | loop5 + higher thresholds `0.30/0.38/0.46` | `1.3656079887` | `+0.0046306385` |
+Corrected homogeneous baseline:
+
+- `orig = 1.282646900577691`
+
+Best homogeneous asymmetry point tested in this cycle:
+
+- `mcf_lbm_asym_guard_v1 = 1.2190569246596739`
+- delta vs homogeneous `orig`: `-0.06358997591801718`
+- relative delta: `-4.957874141502662%`
 
 Takeaway:
 
-- this was the best family overall
-- the best point kept the `avg` activation semantics from loop5 and improved them with slightly higher thresholds
+- the per-core asymmetry idea as tested in the homogeneous controller space was also clearly dead
 
-## 6. Why The Goals Were Missed
+## 6. Quantitative Failure Analysis
 
-### 6.1 Intermediate single-core goals
+### 6.1 Why the single-core `lbm` goal failed
 
-Single-core `astar`:
+The intermediate target was:
 
-- best IPC: `0.116503266306`
-- target IPC: `0.11668185627147408`
-- miss: `0.00017858996547408246`
+- `0.8749066330981096`
 
-Single-core `lbm`:
+Best exact point found:
 
-- best IPC: `0.8706`
-- target IPC: `0.8727447797270331`
-- miss: `0.002144779727033086`
+- `0.8728014354438657`
+
+Miss:
+
+- `0.0021051976542438844` IPC
+
+What the data says:
+
+- `spp_orig` threshold changes do not create headroom; they only move `lbm` around baseline or below it
+- `fdp` is consistently below `orig`
+- `bop` is not competitive at all for `lbm`
+- the only positive new headroom came from a structural `spp_orig` variant with moderate deep-chain fill expansion (`deep_fill_bonus=12`)
+- therefore pair headroom has to come from coordination around `lbm`, not from replacing `lbm`'s single-core winner
+
+### 6.2 Why hetero `mcf + lbm` missed
+
+Best point:
+
+- `orig_fdp = 1.294978831807267`
+
+Compared to hetero `orig_orig`:
+
+- `mcf`: `0.033382548304568486 -> 0.033295509641944825`
+  - delta: `-0.000087038662623661`
+- `lbm`: `0.814687741656703 -> 0.8158351217788197`
+  - delta: `+0.001147380122116734`
+- net WS gain: `+0.00038256564595795517`
+
+Remaining gap to target:
+
+- `0.006090415684848471` WS
+
+Equivalent additional gain still needed:
+
+- if only `mcf` improves: `+0.0005666972342389219` IPC
+- if only `lbm` improves: `+0.005302034906466362` IPC
 
 Interpretation:
 
-- `astar` was very close and mainly needed a tiny additional FDP-side gain
-- `lbm` was not close enough; the remaining gap was materially larger
+- the pair can already recover a little more `lbm` with `orig_fdp`
+- but it is still not extracting enough of the large single-core `mcf` headroom
+- that makes the likely next step a true hetero controller that protects `lbm` while carrying more of `mcf`'s single-core `bop`-like gain into the pair
 
-### 6.2 Final pair goal
+### 6.3 Why hetero `bzip2 + lbm` missed
 
-Best pair:
+Best point:
 
-- WS: `1.3656079886747214`
-- target WS: `1.367782236974166`
-- miss: `0.002174248299444459`
+- `orig_fdp = 2.008543659928995`
 
-Equivalent remaining gap from `iter8`:
+Compared to hetero `orig_orig`:
 
-- if `lbm` is fixed at `0.8259`, needed `astar` gain is about `+0.0002524332` IPC
-- if `astar` is fixed at `0.04813`, needed `lbm` gain is about `+0.0018881232` IPC
+- `bzip2`: `2.2111608720282567 -> 2.2105244775649586`
+  - delta: `-0.0006363944632981466`
+- `lbm`: `0.845029670681797 -> 0.8461920028811128`
+  - delta: `+0.001162332199315832`
+- net WS gain: `+0.001036754900835657`
 
-Quantitative interpretation:
+Remaining gap to target:
 
-- the pair bottleneck is still mostly on the `lbm` side
-- `iter8` already found the right activation semantics for preserving `astar`
-- the missing improvement is now a small additional `lbm` recovery under shared pressure without giving back the `astar` gain
+- `0.009000779624305011` WS
 
-So the current best explanation is:
+Equivalent additional gain still needed:
 
-- `max`-driven global triggering was too harsh at `1M + 5M`
-- pure stock `avg+max` stayed too conservative about `lbm` preservation
-- `avg` plus runway relief was the right direction
-- but the current controller still lacks enough asymmetry to free `lbm` a little more once `astar` is already safe
+- if only `bzip2` improves: `+0.0191952788500487` IPC
+- if only `lbm` improves: `+0.007835663478963946` IPC
 
-## 7. Manual: Local <-> `office-kijun`
+Interpretation:
 
-### 7.1 Sync
+- `bzip2` is already very strong in the hetero baseline
+- the missing WS is mostly an `lbm` protection / coordination problem
+- more aggressive `bzip2`-side policy swaps do not help; they mostly damage the pair
 
-Use local as the source of truth and `office-kijun` as the execution copy.
+## 7. Idea Families Run In This Cycle
+
+At least seven distinct logical idea families were exercised. The useful ones are already in the ledgers above; the full family list was:
+
+1. single-core `mcf` stock landscape and FDP retune
+2. single-core `lbm` `spp_orig` threshold / continuation sweep
+3. single-core `lbm` alternative stock family: `fdp`
+4. single-core `lbm` alternative stock family: `bop`
+5. single-core `lbm` structural deep-lookahead / continuation-gating changes
+6. homogeneous `bzip2 + lbm` symmetric GSP env family
+7. homogeneous `mcf + lbm` asymmetric GSP family
+8. true hetero `bzip2 + lbm` stock-mix family
+9. true hetero `mcf + lbm` stock-mix family
+
+Dead directions from this cycle:
+
+- `lbm` on `bop`
+- `lbm` on `fdp`
+- homogeneous symmetric GSP for `bzip2 + lbm`
+- homogeneous asymmetric GSP for `mcf + lbm`
+- `bzip2` on `bop` or `no_pref` inside the hetero pair
+- `lbm` on `no_pref` inside either pair
+
+## 8. Execution Manual
+
+### 8.1 Local to `office-kijun` sync
+
+Use local-to-remote sync only for source files, never for remote build metadata:
 
 ```bash
-rsync -av \
+rsync -av --delete \
   --exclude '.git' \
   --exclude 'bin' \
   --exclude 'traces' \
@@ -330,131 +509,82 @@ rsync -av \
   ./ office-kijun:~/Developers/ChampSim/
 ```
 
-If machine-specific build files were already synced by mistake:
+### 8.2 Safe remote worker-copy procedure
+
+For a worker copy on `office-kijun`, clone from the remote main tree, not directly from local:
 
 ```bash
-ssh office-kijun 'cd ~/Developers/ChampSim && rm -f absolute.options _configuration.mk'
+MAIN=~/Developers/ChampSim
+ROOT=~/Developers/ChampSim_agents/<worker>
+rsync -a --delete --exclude 'bin' --exclude 'results/logs' --exclude 'traces' "$MAIN/" "$ROOT/"
+ln -sfn "$MAIN/traces" "$ROOT/traces"
 ```
 
-### 7.2 Remote rebuild
+This avoids breaking `fmt` and other remote include paths.
 
-For any trusted run, always rebuild from a clean generated state:
+### 8.3 Clean rebuild
 
 ```bash
-rm -f absolute.options _configuration.mk
+rm -f _configuration.mk
 make configclean
-./config.sh <config-json>
-make -j4 bin/<binary-name>
+./config.sh <config>
+make -j4 bin/<target>
 ```
 
-### 7.3 Active traces
+### 8.4 Pair-result sanity check
 
-Current active traces used in this cycle:
+`quick_pair_eval.py` now prefers the exact `instructions / cycles` from the `CPU n cumulative IPC` lines, which preserves both precision and CPU ordering.
 
-- `traces/473.astar-359B.champsimtrace.xz`
-- `traces/470.lbm-1274B.champsimtrace.xz`
-
-Do not silently swap in the older deprecated `473.astar-42B` name.
-
-### 7.4 Retained run recipes
-
-Single-core `astar` best:
+If you need to validate an old pair run manually:
 
 ```bash
-rm -f absolute.options _configuration.mk
-make configclean
-./config.sh configs/spp_fdp_config.json
-make -j4 bin/champsim_fdp
-
-python3 scripts/quick_pair_eval.py \
-  --binary ./bin/champsim_fdp \
-  --trace ./traces/473.astar-359B.champsimtrace.xz \
-  --warmup 1000000 \
-  --simulation 5000000 \
-  --summary-path results/retained_astar_lbm_1M_5M/single_core/astar_best_fdp_loop2_pf20_1M_5M.summary.json
+grep -n 'CPU [01] runs\|CPU [01] cumulative IPC' <log>
 ```
 
-Single-core `lbm` best:
+Trust the CPU-to-trace mapping from the log, then recompute:
 
-```bash
-rm -f absolute.options _configuration.mk
-make configclean
-./config.sh configs/spp_orig_config.json
-make -j4 bin/champsim_orig
-
-python3 scripts/quick_pair_eval.py \
-  --binary ./bin/champsim_orig \
-  --trace ./traces/470.lbm-1274B.champsimtrace.xz \
-  --warmup 1000000 \
-  --simulation 5000000 \
-  --summary-path results/retained_astar_lbm_1M_5M/single_core/lbm_best_orig_iter2_lookahead_half_1M_5M.summary.json
+```text
+WS = IPC_workload0 / single_core_orig_workload0
+   + IPC_workload1 / single_core_orig_workload1
 ```
 
-2-core `astar + lbm` best:
+## 9. Source-of-Truth Paths
 
-```bash
-rm -f absolute.options _configuration.mk
-make configclean
-./config.sh configs/gsp_tiered_2core.json
-make -j4 bin/champsim_gsp_tiered_2core
+Current cycle artifacts:
 
-SPP_GSP_TIERED_PRESSURE_MODE=avg \
-SPP_GSP_TIERED_GLOBAL_MSHR_T1=0.30 \
-SPP_GSP_TIERED_GLOBAL_MSHR_T2=0.38 \
-SPP_GSP_TIERED_GLOBAL_MSHR_T3=0.46 \
-SPP_GSP_TIERED_GLOBAL_LLC_T1=0.30 \
-SPP_GSP_TIERED_GLOBAL_LLC_T2=0.38 \
-SPP_GSP_TIERED_GLOBAL_LLC_T3=0.46 \
-SPP_GSP_TIERED_LOCAL_RUNWAY_MSHR=0.65 \
-SPP_GSP_TIERED_LOCAL_RUNWAY_LLC_RQ=0.18 \
-SPP_GSP_TIERED_BURST_ACTIVATION_GAP=0.10 \
-SPP_GSP_TIERED_CONGESTED_EPOCHS=3 \
-SPP_GSP_TIERED_RELAXED_EPOCHS=2 \
-SPP_GSP_TIERED_CANDIDATE_ID=iter8_runway_relief_higher_thresholds_1M_5M \
-python3 scripts/quick_pair_eval.py \
-  --binary ./bin/champsim_gsp_tiered_2core \
-  --trace ./traces/473.astar-359B.champsimtrace.xz \
-  --trace ./traces/470.lbm-1274B.champsimtrace.xz \
-  --baseline-ipc astar=0.11610134952385481 \
-  --baseline-ipc lbm=0.8684027658975455 \
-  --warmup 1000000 \
-  --simulation 5000000 \
-  --summary-path results/retained_astar_lbm_1M_5M/pair/astar_lbm_best_gsp_iter8_1M_5M.summary.json
-```
+- sliding-window selector research artifacts:
+  - [results/cycle_sliding_window_selector_20260420](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420)
+- retained in-sim selector prefetcher:
+  - [adaptive_selector.h](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.h)
+  - [adaptive_selector.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.cc)
+- retained selector config:
+  - [adaptive_selector_config.json](/Users/shinkijun/Developers/ChampSim/configs/adaptive_selector_config.json)
+- retained selector build helper:
+  - [scripts/build_singlecore_adaptive_selector_binaries.sh](/Users/shinkijun/Developers/ChampSim/scripts/build_singlecore_adaptive_selector_binaries.sh)
+- retained selector run helper:
+  - [scripts/run_singlecore_adaptive_selector.py](/Users/shinkijun/Developers/ChampSim/scripts/run_singlecore_adaptive_selector.py)
+- office-kijun clean-rebuild selector validation:
+  - [results/cycle_sliding_window_selector_20260420/main_thread](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420/main_thread)
+- retained stability fixes:
+  - [spp_dev.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_dev/spp_dev.cc)
+  - [spp_orig.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.cc)
+- single-core baselines:
+  - [results/cycle_mcf_bzip2_lbm_20260420/single_core](/Users/shinkijun/Developers/ChampSim/results/cycle_mcf_bzip2_lbm_20260420/single_core)
+- `lbm` alternative-family artifacts:
+  - [results/cycle_mcf_bzip2_lbm_20260420/agent_runs/lbm_alt](/Users/shinkijun/Developers/ChampSim/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/lbm_alt)
+- `lbm` structural `spp_orig` artifacts:
+  - [results/cycle_mcf_bzip2_lbm_20260420/agent_runs/lbm_orig_structural](/Users/shinkijun/Developers/ChampSim/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/lbm_orig_structural)
+- hetero `bzip2 + lbm` fast-mix artifacts:
+  - [results/cycle_mcf_bzip2_lbm_20260420/agent_runs/pair_bzip2_lbm_hetero_fast](/Users/shinkijun/Developers/ChampSim/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/pair_bzip2_lbm_hetero_fast)
+- true hetero mixed-binary artifacts on `office-kijun`:
+  - `~/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/pair_hetero_mix`
 
-### 7.5 Parallel remote work
+Retained previous-cycle reference:
 
-If multiple trees are needed on `office-kijun`, isolate them:
+- [results/retained_astar_lbm_1M_5M](/Users/shinkijun/Developers/ChampSim/results/retained_astar_lbm_1M_5M)
 
-```bash
-ssh office-kijun 'mkdir -p ~/Developers/ChampSim_agents/<worker>'
-ssh office-kijun 'rsync -a --exclude .git --exclude traces ~/Developers/ChampSim/ ~/Developers/ChampSim_agents/<worker>/'
-ssh office-kijun 'ln -sfn ~/Developers/ChampSim/traces ~/Developers/ChampSim_agents/<worker>/traces'
-```
+Retained code change from this cycle:
 
-Do not share:
+- [scripts/quick_pair_eval.py](/Users/shinkijun/Developers/ChampSim/scripts/quick_pair_eval.py)
 
-- `.csconfig`
-- `_configuration.mk`
-- `absolute.options`
-- `bin/`
-
-across concurrent code-changing workers.
-
-## 8. Bottom Line
-
-The current retained state is:
-
-- single-core `astar` best tuned point: `+0.3462%`
-- single-core `lbm` best tuned point: `+0.2530%`
-- 2-core `astar + lbm` best tuned point: `+0.3402%`
-
-So the cycle improved all three objectives, but none reached the requested `+0.5%` line.
-
-The best next technical direction is not another stock policy swap.
-It is:
-
-- keep `spp_gsp_tiered`
-- keep `avg`-pressure activation
-- keep the runway-relief idea
-- add a more asymmetric relief path so `lbm` regains roughly `0.0019` IPC without giving back the `astar` gain
+Previous `astar + lbm` findings are no longer the active scope for this file, but their retained summaries remain in the path above.

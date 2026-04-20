@@ -36,6 +36,7 @@ struct bop : public champsim::modules::prefetcher {
   // ─────────────────────────────────────────────────────────────────────────
 
   using prefetcher::prefetcher;
+  uint32_t prefetch_metadata_tag = 0;
 
   void     prefetcher_initialize();
   void     prefetcher_cycle_operate();
@@ -46,6 +47,7 @@ struct bop : public champsim::modules::prefetcher {
                uint8_t prefetch, champsim::address evicted_addr,
                uint32_t metadata_in);
   void     prefetcher_final_stats();
+  uint32_t encode_prefetch_metadata(uint32_t raw_metadata) const { return (prefetch_metadata_tag << 24) | (raw_metadata & 0x00FFFFFFu); }
 
   // ── Recent Requests Table (2-bank, XOR-hashed) ────────────────────────────
   std::array<uint32_t, (1 << RRINDEX)> rr_left{};    // left bank: tag per entry

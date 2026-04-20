@@ -43,12 +43,19 @@ struct spp_orig : public champsim::modules::prefetcher {
   uint32_t fill_threshold = 90;
   uint32_t pf_threshold   = 25;
 
+  // Structural deep-lookahead knobs for the current best lbm expert.
+  constexpr static uint32_t DEEP_CONF_FLOOR = 15;
+  constexpr static uint32_t DEEP_CONTINUE_STEP = 2;
+  constexpr static uint32_t DEEP_DOMINANCE_GAP = 4;
+  constexpr static uint32_t DEEP_FILL_BONUS = 12;
+
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
   constexpr static uint32_t GLOBAL_COUNTER_MAX = ((1 << GLOBAL_COUNTER_BIT) - 1);
   constexpr static std::size_t MAX_GHR_ENTRY = 8;
 
   using prefetcher::prefetcher;
+  uint32_t prefetch_metadata_tag = 0;
   uint32_t prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,
                                     uint32_t metadata_in);
   uint32_t prefetcher_cache_fill(champsim::address addr, long set, long way, uint8_t prefetch, champsim::address evicted_addr, uint32_t metadata_in);
@@ -59,6 +66,7 @@ struct spp_orig : public champsim::modules::prefetcher {
 
   enum FILTER_REQUEST { SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT }; // Request type for prefetch filter
   static uint64_t get_hash(uint64_t key);
+  uint32_t encode_prefetch_metadata(uint32_t raw_metadata) const { return (prefetch_metadata_tag << 24) | (raw_metadata & 0x00FFFFFFu); }
 
   struct block_in_page_extent : champsim::dynamic_extent {
     block_in_page_extent() : dynamic_extent(champsim::data::bits{LOG2_PAGE_SIZE}, champsim::data::bits{LOG2_BLOCK_SIZE}) {}

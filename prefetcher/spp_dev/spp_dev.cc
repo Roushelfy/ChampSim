@@ -89,7 +89,7 @@ uint32_t spp_dev::prefetcher_cache_operate(champsim::address addr, champsim::add
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
           if (FILTER.check(pf_addr, ((confidence_q[i] >= fill_threshold) ? spp_dev::SPP_L2C_PREFETCH : spp_dev::SPP_LLC_PREFETCH))) {
-            prefetch_line(pf_addr, (confidence_q[i] >= fill_threshold), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            prefetch_line(pf_addr, (confidence_q[i] >= fill_threshold), encode_prefetch_metadata(0)); // Use addr (not base_addr) to obey the same physical page boundary
 
             ++fdp_epoch_pf_issued; // FDP: count ALL issued prefetches (LLC + L2C) for accuracy tracking
 
@@ -571,7 +571,7 @@ void spp_dev::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t pf_confide
 
     // GHR replacement policy is based on the stored confidence value
     // An entry with the lowest confidence is selected as a victim
-    if (confidence[i] < min_conf) {
+    if (confidence[i] <= min_conf) {
       min_conf = confidence[i];
       victim_way = i;
     }

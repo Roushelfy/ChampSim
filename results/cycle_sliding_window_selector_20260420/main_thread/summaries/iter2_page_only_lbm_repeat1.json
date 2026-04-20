@@ -1,0 +1,70 @@
+{
+  "binary": "/Users/kijunshi/Developers/ChampSim/bin/champsim_adaptive_selector",
+  "env": {
+    "ADAPT_DECISION_STREAK": "2",
+    "ADAPT_EVAL_STRIDE": "16",
+    "ADAPT_FDP_PAGE_GROWTH_MAX": "0.17",
+    "ADAPT_INITIAL_MODE": "none",
+    "ADAPT_LOCK_AFTER_SWITCH": "1",
+    "ADAPT_ORIG_PAGE_GROWTH_MAX": "0.40",
+    "ADAPT_RULE_STYLE": "page_only",
+    "ADAPT_WINDOW_REFS": "64"
+  },
+  "label": "iter2_page_only_lbm_repeat1",
+  "sum_ipc": 0.8728444464694424,
+  "workloads": {
+    "lbm": {
+      "binary": "/Users/kijunshi/Developers/ChampSim/bin/champsim_adaptive_selector",
+      "controller_lines": [
+        "[ADAPTIVE_SELECTOR] init window_size=64 eval_stride=16 decision_streak=2 lock_after_switch=1 rule_style=page_only initial_mode=none orig_rfo_min=0.3 orig_page_growth_min=0.08 orig_page_growth_max=0.4 orig_small_delta_max=0.65 fdp_page_growth_max=0.17 fdp_small_delta_min=0.65 small_delta_limit=4",
+        "[ADAPTIVE_SELECTOR] switch demand_observations=80 from=none to=orig streak=2 rfo_share=0.546875 page_growth=0.203125 small_delta_ratio=0.365079",
+        "[ADAPTIVE_SELECTOR] final active_mode=orig evaluations=2 switches=1 locked=1 demand_observations=280649 last_candidate=orig last_rfo_share=0.546875 last_page_growth=0.203125 last_small_delta_ratio=0.365079",
+        "[SPP_ORIG] pf_threshold=25 fill_threshold=90 deep_conf_floor=15 deep_continue_step=2 deep_dominance_gap=4 deep_fill_bonus=12"
+      ],
+      "cycles": 5728401,
+      "delta_vs_orig": 0.0022905826902287485,
+      "dram": {
+        "avg_dbus_congested_cycle": 7.476032588793403,
+        "row_hit_rate": 0.06422323339358807,
+        "rq_row_buffer_hit": 9273,
+        "rq_row_buffer_miss": 135114
+      },
+      "dtlb_load_miss": 12406,
+      "env": {
+        "ADAPT_DECISION_STREAK": "2",
+        "ADAPT_EVAL_STRIDE": "16",
+        "ADAPT_FDP_PAGE_GROWTH_MAX": "0.17",
+        "ADAPT_INITIAL_MODE": "none",
+        "ADAPT_LOCK_AFTER_SWITCH": "1",
+        "ADAPT_ORIG_PAGE_GROWTH_MAX": "0.40",
+        "ADAPT_RULE_STYLE": "page_only",
+        "ADAPT_WINDOW_REFS": "64"
+      },
+      "features": {
+        "avg_dbus_congested_cycle": 7.476032588793403,
+        "dtlb_load_miss_mpki": 2.481198511280893,
+        "ipc": 0.8728444464694424,
+        "llc_miss_per_kinst": 47.57617145429713,
+        "pf_accuracy": 0.07146195743760791,
+        "pf_issued_per_kinst": 62.90056225966265,
+        "pf_useful_per_kinst": 4.494997303001618,
+        "row_hit_rate": 0.06422323339358807
+      },
+      "gain_retention_vs_best": 1.0191366648072366,
+      "instructions": 5000003,
+      "ipc": 0.8728444464694424,
+      "label": "iter2_page_only_lbm_repeat1_lbm",
+      "llc_miss": 237881,
+      "meets_minimum_acceptable": true,
+      "minimum_acceptable_ipc": 0.8721271639444701,
+      "pf_accuracy": 0.07146195743760791,
+      "pf_issued": 314503,
+      "pf_useful": 22475,
+      "printed_ipc": 0.8728,
+      "simulation": 5000000,
+      "trace": "/Users/kijunshi/Developers/ChampSim/traces/470.lbm-1274B.champsimtrace.xz",
+      "warmup": 1000000,
+      "workload": "lbm"
+    }
+  }
+}
