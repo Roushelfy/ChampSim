@@ -66,6 +66,7 @@ private:
   bool lock_after_switch = true;
   double orig_page_growth_max = 0.40;
   double fdp_page_growth_max = 0.17;
+  double orig_small_delta_min = 0.70;
 
   void configure_from_env();
   void ensure_initialized(expert_mode mode);

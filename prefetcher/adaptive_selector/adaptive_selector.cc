@@ -69,7 +69,8 @@ void adaptive_selector::prefetcher_initialize()
             << " lock_after_switch=" << lock_after_switch
             << " initial_mode=" << mode_name(active_mode)
             << " orig_page_growth_max=" << orig_page_growth_max
-            << " fdp_page_growth_max=" << fdp_page_growth_max << std::endl;
+            << " fdp_page_growth_max=" << fdp_page_growth_max
+            << " orig_small_delta_min=" << orig_small_delta_min << std::endl;
 }
 
 void adaptive_selector::prefetcher_cycle_operate()
@@ -120,6 +121,7 @@ void adaptive_selector::prefetcher_final_stats()
             << " demand_observations=" << demand_observations
             << " last_candidate=" << mode_name(last_candidate)
             << " last_rfo_share=" << last_features.rfo_share
+            << " last_line_growth=" << last_features.line_growth
             << " last_page_growth=" << last_features.page_growth
             << " last_small_delta_ratio=" << last_features.small_delta_ratio << std::endl;
 
@@ -146,6 +148,7 @@ void adaptive_selector::configure_from_env()
   lock_after_switch = read_bool_env("ADAPT_LOCK_AFTER_SWITCH", lock_after_switch);
   orig_page_growth_max = read_double_env("ADAPT_ORIG_PAGE_GROWTH_MAX", orig_page_growth_max);
   fdp_page_growth_max = read_double_env("ADAPT_FDP_PAGE_GROWTH_MAX", fdp_page_growth_max);
+  orig_small_delta_min = read_double_env("ADAPT_ORIG_SMALL_DELTA_MIN", orig_small_delta_min);
 
   if (const char* raw_mode = std::getenv("ADAPT_INITIAL_MODE"); raw_mode != nullptr) {
     const std::string mode{raw_mode};
@@ -218,26 +221,51 @@ adaptive_selector::window_features adaptive_selector::compute_window_features() 
     return features;
   }
 
+  std::unordered_set<uint64_t> unique_lines;
   std::unordered_set<uint64_t> unique_pages;
+  unique_lines.reserve(history.size());
   unique_pages.reserve(history.size());
 
+  std::size_t rfo_count = 0;
+  std::size_t small_delta_count = 0;
+  bool have_prev_line = false;
+  uint64_t prev_line = 0;
+
   for (const auto& entry : history) {
+    unique_lines.insert(entry.line);
     unique_pages.insert(entry.page);
+    rfo_count += static_cast<std::size_t>(entry.is_rfo);
+
+    if (have_prev_line) {
+      const auto delta = (entry.line >= prev_line) ? (entry.line - prev_line) : (prev_line - entry.line);
+      if (delta <= 4) {
+        ++small_delta_count;
+      }
+    }
+
+    prev_line = entry.line;
+    have_prev_line = true;
   }
 
+  features.rfo_share = static_cast<double>(rfo_count) / static_cast<double>(history.size());
+  features.line_growth = static_cast<double>(unique_lines.size()) / static_cast<double>(history.size());
   features.page_growth = static_cast<double>(unique_pages.size()) / static_cast<double>(history.size());
+  features.small_delta_ratio = history.size() > 1 ? static_cast<double>(small_delta_count) / static_cast<double>(history.size() - 1) : 0.0;
   return features;
 }
 
 adaptive_selector::expert_mode adaptive_selector::classify_window(const window_features& features) const
 {
+  if (features.page_growth >= orig_page_growth_max) {
+    return expert_mode::bop;
+  }
+  if (features.small_delta_ratio >= orig_small_delta_min) {
+    return expert_mode::orig;
+  }
   if (features.page_growth < fdp_page_growth_max) {
     return expert_mode::fdp;
   }
-  if (features.page_growth < orig_page_growth_max) {
-    return expert_mode::orig;
-  }
-  return expert_mode::bop;
+  return expert_mode::orig;
 }
 
 void adaptive_selector::evaluate_and_update()
@@ -267,6 +295,7 @@ void adaptive_selector::evaluate_and_update()
             << " to=" << mode_name(active_mode)
             << " streak=" << candidate_streak
             << " rfo_share=" << last_features.rfo_share
+            << " line_growth=" << last_features.line_growth
             << " page_growth=" << last_features.page_growth
             << " small_delta_ratio=" << last_features.small_delta_ratio << std::endl;
 
