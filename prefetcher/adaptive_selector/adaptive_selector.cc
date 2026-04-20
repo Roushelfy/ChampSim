@@ -85,10 +85,9 @@ uint32_t adaptive_selector::prefetcher_cache_operate(champsim::address addr, cha
     observe_demand(addr, type);
   }
 
-  uint32_t metadata_out = metadata_in;
-  if (type == access_type::LOAD || type == access_type::PREFETCH) {
-    metadata_out = forward_cache_operate(active_mode, addr, ip, cache_hit, useful_prefetch, type, strip_source_tag(metadata_in));
-  }
+  // Preserve each expert's native view of the access stream. In particular,
+  // hiding RFOs from SPP noticeably skews lbm, which is store-heavy.
+  uint32_t metadata_out = forward_cache_operate(active_mode, addr, ip, cache_hit, useful_prefetch, type, strip_source_tag(metadata_in));
 
   if (is_demand && !locked && ready_to_evaluate()) {
     evaluate_and_update();

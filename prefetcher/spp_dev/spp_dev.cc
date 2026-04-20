@@ -126,7 +126,7 @@ uint32_t spp_dev::prefetcher_cache_operate(champsim::address addr, champsim::add
     // Update base_addr and curr_sig
     if (lookahead_way < PT_WAY) {
       uint32_t set = get_hash(curr_sig) % PT_SET;
-      base_addr += (PT.delta[set][lookahead_way] << LOG2_BLOCK_SIZE);
+      base_addr = champsim::address{champsim::block_number{base_addr} + PT.delta[set][lookahead_way]};
 
       // PT.delta uses a 7-bit sign magnitude representation to generate
       // sig_delta
@@ -403,9 +403,18 @@ void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typenam
 {
   // Update (sig, delta) correlation
   uint32_t set = get_hash(curr_sig) % PT_SET, local_conf = 0, pf_conf = 0, max_conf = 0;
+  const auto queue_capacity = std::min(delta_q.size(), confidence_q.size());
+
+  if (queue_capacity == 0) {
+    lookahead_conf = 0;
+    return;
+  }
 
   if (c_sig[set]) {
     for (uint32_t way = 0; way < PT_WAY; way++) {
+      if (pf_q_tail >= queue_capacity)
+        break;
+
       local_conf = (100 * c_delta[set][way]) / c_sig[set];
       pf_conf = depth ? (_parent->GHR.global_accuracy * c_delta[set][way] / c_sig[set] * lookahead_conf / 100) : local_conf;
 
@@ -433,7 +442,6 @@ void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typenam
         }
       }
     }
-    pf_q_tail++;
 
     lookahead_conf = max_conf;
     if (lookahead_conf >= pf_thresh)
@@ -442,8 +450,11 @@ void spp_dev::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typenam
     if constexpr (SPP_DEBUG_PRINT) {
       std::cout << "global_accuracy: " << _parent->GHR.global_accuracy << " lookahead_conf: " << lookahead_conf << std::endl;
     }
-  } else {
+  } else if (pf_q_tail < queue_capacity) {
     confidence_q[pf_q_tail] = 0;
+    lookahead_conf = 0;
+  } else {
+    lookahead_conf = 0;
   }
 }
 

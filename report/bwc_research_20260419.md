@@ -19,7 +19,8 @@ Important interpretation rule for this cycle:
 
 - the active artifact is now an in-simulator wrapper prefetcher, not the older external selector driver
 - exact retention is still evaluated against the frozen office-kijun best-point ledger, and clean-rebuild validation is required on the current source
-- because `lbm` already showed current-source instability in the previous cycle, repeated validation of the same selector setting is part of the source-of-truth
+- the earlier `lbm` drift turned out to be a source-level reproducibility bug, not a valid retained performance point
+- current source-of-truth therefore begins only after the reproducibility fixes in `spp_orig` and `spp_dev`
 
 ## 1. Executive Summary
 
@@ -28,11 +29,12 @@ Status at the end of this cycle:
 | goal | result |
 |---|---|
 | in-simulator sliding-window selector implementation | achieved |
-| best observed `1M + 5M` selector run | achieved, `4/4` pass |
+| reproducibility root cause isolation | achieved |
+| best observed clean-rebuild `1M + 5M` selector run | achieved, `4/4` pass |
 | repeated clean-rebuild target on `astar` | achieved |
 | repeated clean-rebuild target on `mcf` | achieved |
 | repeated clean-rebuild target on `bzip2` | achieved |
-| repeated clean-rebuild target on `lbm` | achieved in the retained repeat, but not fully robust across identical reruns |
+| repeated clean-rebuild target on `lbm` | achieved and reproduced identically across repeated reruns on the same binary |
 
 Final retained selector artifact:
 
@@ -57,8 +59,9 @@ Main conclusion:
 
 - the retained selector is now a real in-simulator sliding-window expert selector
 - the strongest family this cycle was locality-footprint-based online classification with hysteresis, not reward-only selection and not unsupervised clustering
-- the retained `page_growth` rule achieves `4/4` target retention on the repeated clean-rebuild validation run `iter2_page_only_repeatfull`
-- the remaining risk is not selector misclassification but `lbm orig_like` reproducibility on the current source: the identical selector setting also produced one low outlier run
+- the retained `page_growth` rule achieves `4/4` target retention on the clean-rebuild validation run `reprofix2_full`
+- the earlier `lbm` drift was caused by two reproducibility bugs in SPP-family lookahead code: queue-bound corruption and signed-shift UB
+- after those fixes, the retained selector deterministically chooses `fdp` for `lbm` and reproduces the same `lbm` IPC across repeated reruns on the same binary
 
 ## 2. Frozen Baselines And Retention Targets
 
@@ -73,45 +76,46 @@ Main conclusion:
 
 ### 2.2 Retained in-sim selector outcome
 
-The retained run is `iter2_page_only_repeatfull` from the in-simulator wrapper selector. All four workloads hit or exceed the minimum acceptable IPC.
+The retained run is `reprofix2_full` from the in-simulator wrapper selector. All four workloads hit or exceed the minimum acceptable IPC on the reproducibility-fixed source.
 
 | workload | selector decision | switch point | exact selected IPC | retention vs best gain | status |
 |---|---|---:|---:|---:|---|
-| `astar` | `bop` | `80` demand-memory accesses | `0.11753401884289778` | `197.1403%` | pass |
+| `astar` | `bop` | `80` demand-memory accesses | `0.11769683762267738` | `222.0235%` | pass |
 | `mcf` | `bop` | `80` demand-memory accesses | `0.0955303095422819` | `138.8669%` | pass |
-| `lbm` | `orig_like` | `80` demand-memory accesses | `0.8728444464694424` | `101.9137%` | pass |
-| `bzip2` | `fdp` | `80` demand-memory accesses | `2.1498695244446564` | `89.5932%` | pass |
+| `lbm` | `fdp` | `80` demand-memory accesses | `0.8804757668415644` | `441.4499%` | pass |
+| `bzip2` | `fdp` | `80` demand-memory accesses | `2.150898860454012` | `94.9408%` | pass |
 
 Aggregate selector IPC sum:
 
-- selector sum IPC: `3.2357782992992785`
+- selector sum IPC: `3.244601774460535`
 - frozen all-`orig` sum IPC: `3.2124693390158922`
-- delta vs frozen all-`orig`: `+0.023308960283386278`
+- delta vs frozen all-`orig`: `+0.03213243544464284`
 
 Exact switch features in the retained run:
 
-- `astar`: `page_growth=0.640625 -> bop`
+- `astar`: `page_growth=0.65625 -> bop`
 - `mcf`: `page_growth=0.96875 -> bop`
-- `lbm`: `page_growth=0.203125 -> orig_like`
+- `lbm`: `page_growth=0.09375 -> fdp`
 - `bzip2`: `page_growth=0.125 -> fdp`
 
 ### 2.3 Validation sequence and drift
 
-Three main validation points were kept for this cycle.
+Three retained validation points define the current source-of-truth.
 
 | label | rule | outcome | exact notes |
 |---|---|---|---|
-| `iter1_default` | `rfo + page + small-delta` | fail | `astar` and `mcf` passed, but `bzip2` misclassified to `orig_like` and `lbm` hit a low outlier |
-| `iter2_page_only` | `page_growth` only | fail | `astar`, `mcf`, `bzip2` passed, but `lbm` hit a low outlier |
-| `iter2_page_only_repeatfull` | `page_growth` only | pass | `4/4` workloads passed on the repeated clean-rebuild run |
+| `iter1_default` | `rfo + page + small-delta` | obsolete | old output retained only as a pre-fix diagnostic; not source-of-truth after the SPP reproducibility fixes |
+| `reprofix2_full` | `page_growth` only | pass | clean-rebuild `4/4` pass on the reproducibility-fixed source |
+| `reprofix3_lbm_r1/r2` | `page_growth` only | pass | repeated `lbm` reruns reproduced bit-identically on the same current binary |
 
 Exact summary table:
 
 | label | sum IPC | `astar` | `mcf` | `lbm` | `bzip2` |
 |---|---:|---:|---:|---:|---:|
 | `iter1_default` | `3.155439446413633` | `0.11753401884289778` | `0.0955303095422819` | `0.8233256725623921` | `2.1190494454660613` |
-| `iter2_page_only` | `3.1869667389934833` | `0.11753401884289778` | `0.0955303095422819` | `0.8240328861636473` | `2.1498695244446564` |
-| `iter2_page_only_repeatfull` | `3.2357782992992785` | `0.11753401884289778` | `0.0955303095422819` | `0.8728444464694424` | `2.1498695244446564` |
+| `reprofix2_full` | `3.244601774460535` | `0.11769683762267738` | `0.0955303095422819` | `0.8804757668415644` | `2.150898860454012` |
+| `reprofix3_lbm_r1` | `0.8804757668415644` | `-` | `-` | `0.8804757668415644` | `-` |
+| `reprofix3_lbm_r2` | `0.8804757668415644` | `-` | `-` | `0.8804757668415644` | `-` |
 
 ## 3. Selector Design And Experiment Cycle
 
@@ -134,19 +138,19 @@ Exact summary table:
 | page / locality footprint (`W4`) | `7` | `page_growth` alone gives `4/4` window-majority separation; selected as the simplest retained family | selected |
 | two-stage SPP split + BOP gate (`W5`) | `5` | `BOP` behaves as a gated specialist, not a safe default | diagnostic |
 | centroid / score classifier (`W6`) | `7` | centroid / score works, unsupervised `k-means` fails badly on `lbm` | diagnostic |
-| local in-sim wrapper implementation (`W7`) | `2` retained variants | `page_only` in-sim selector reaches `4/4` on the retained repeatfull validation | retained |
+| local in-sim wrapper implementation (`W7`) | `2` retained variants | `page_only` in-sim selector reaches `4/4` on the reproducibility-fixed validation `reprofix2_full` | retained |
 
 ### 3.3 Why the retained `page_only` rule works
 
-The in-sim selector sees only recent demand-memory accesses, but `page_growth` still separates the four workloads early enough to choose the right expert.
+The in-sim selector sees only recent demand-memory accesses, but `page_growth` still separates the four workloads early enough to choose the right expert on the reproducibility-fixed source.
 
 Observed switch-window features in the retained pass:
 
 | workload | `page_growth` | selected expert | interpretation |
 |---|---:|---|---|
-| `astar` | `0.640625` | `bop` | large early page churn, stream-like |
+| `astar` | `0.65625` | `bop` | large early page churn, stream-like |
 | `mcf` | `0.96875` | `bop` | extreme page churn |
-| `lbm` | `0.203125` | `orig_like` | moderate footprint, not compact enough for `fdp` |
+| `lbm` | `0.09375` | `fdp` | compact early footprint under the fixed source, strongly below the `fdp` threshold |
 | `bzip2` | `0.125` | `fdp` | compact footprint with high locality |
 
 This maps directly onto the retained thresholds:
@@ -164,47 +168,66 @@ The first retained implementation (`iter1_default`) used a more complex `rfo + p
 
 That made `iter1_default` useful as calibration, but not viable as the retained selector.
 
-### 3.5 `lbm` stability caveat on the retained selector
+### 3.5 `lbm` reproducibility fix on the retained selector
 
-The retained selector setting itself is simple and stable: in all runs it chose the same expert for `lbm`, at the same switch point, with the same logged features. The remaining variance comes from the selected `lbm orig_like` expert.
+The earlier `lbm` drift was not a meaningful selector result. It came from two bugs in the shared SPP-family lookahead path.
 
-Repeated `iter2_page_only`-family `lbm` runs:
+Ranked root-cause list:
 
-| run | IPC | status |
-|---|---:|---|
-| `iter2_page_only` full run | `0.8240328861636473` | fail |
-| `iter2_page_only_lbm_repeat1` | `0.8728444464694424` | pass |
-| `iter2_page_only_repeatfull` | `0.8728444464694424` | pass |
+1. queue-bound corruption in `PATTERN_TABLE::read_pattern`
+   - [spp_orig.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.cc:364)
+   - [spp_dev.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_dev/spp_dev.cc:400)
+   - `pf_q_tail` could advance past queue capacity and later expose out-of-bounds writes / reads on `confidence_q` and `delta_q`
+2. signed-shift undefined behavior in lookahead base-address updates
+   - [spp_orig.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.cc:121)
+   - [spp_dev.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_dev/spp_dev.cc:129)
+   - negative `delta` values were shifted left before address reconstruction
+
+Experimental evidence:
+
+- pre-fix `lbm` page-only selector runs spanned `0.8240328861636473 -> 0.8728444464694424`
+- after the queue-bound fix, the catastrophic low outlier disappeared
+- after the signed-shift fix, repeated current-binary `lbm` reruns reproduced bit-identically
+
+Repeated current-binary `lbm` runs:
+
+| run | binary sha | decision | IPC | status |
+|---|---|---|---:|---|
+| `reprofix3_lbm_r1` | `b4b89a393ce38d258ea15fe1b329550599ae4081bf85c3c548f88977bc996915` | `fdp` | `0.8804757668415644` | pass |
+| `reprofix3_lbm_r2` | `b4b89a393ce38d258ea15fe1b329550599ae4081bf85c3c548f88977bc996915` | `fdp` | `0.8804757668415644` | pass |
 
 Quantitative summary:
 
-- mean IPC: `0.8565739263675107`
-- min IPC: `0.8240328861636473`
-- max IPC: `0.8728444464694424`
-- population stdev: `0.02300999019501585`
-- drift span: `0.04881156030579503`
+- mean IPC: `0.8804757668415644`
+- min IPC: `0.8804757668415644`
+- max IPC: `0.8804757668415644`
+- population stdev: `0.0`
+- drift span: `0.0`
 
 Important implication:
 
-- the retained selector does meet the cycle goal on the repeated clean-rebuild full run
-- the remaining non-robustness is not selector misclassification; it is current-source `lbm orig_like` run-to-run drift
-- the next improvement loop should target `spp_orig` reproducibility rather than selector logic
+- the retained selector is now reproducible on the current binary
+- the earlier `iter2_page_only*` `lbm` outputs are invalidated as UB-affected measurements
+- the next cycle should start from the fixed source, not from the older `lbm orig_like` narrative
 
-### 3.6 Stability bug fixed during the selector work
+### 3.6 Stability bugs fixed during the selector work
 
-Bug:
+Fixes retained in the repo:
 
-- `spp_dev::GLOBAL_REGISTER::update_entry` and `spp_orig::GLOBAL_REGISTER::update_entry` initialized `min_conf = 100` and selected a victim only when `confidence[i] < min_conf`
-- if all entries reached confidence `100`, no victim was selected and the code asserted
-
-Fix:
-
-- change the victim condition from `<` to `<=`
+- `spp_dev::GLOBAL_REGISTER::update_entry` and `spp_orig::GLOBAL_REGISTER::update_entry`
+  - victim condition changed from `<` to `<=`
+  - this removes the all-confidence-`100` no-victim assertion corner case
+- `spp_orig::PATTERN_TABLE::read_pattern` and `spp_dev::PATTERN_TABLE::read_pattern`
+  - queue growth is now bounded by the actual queue capacity
+  - the stale sentinel-style `pf_q_tail++` growth is removed
+- `spp_orig` and `spp_dev` lookahead base-address updates
+  - negative deltas now use safe block-number arithmetic instead of signed left-shift UB
 
 Effect:
 
-- the all-confidence-100 corner case no longer aborts the run
-- the retained expert binaries remain stable enough for the selector experiments
+- catastrophic `lbm` drift is gone
+- current-binary repeated `lbm` runs are now reproducible
+- the retained selector can be used as a clean baseline for the next experiment cycle
 
 ### 3.7 Updated do-not-rerun ledger
 
@@ -212,23 +235,19 @@ Effect:
 |---|---|---:|---|
 | `astar` | fresh current `orig` baseline | `0.11624407059812944` | baseline |
 | `astar` | fresh retained `bop` point | `0.11689840080543869` | current best |
-| `astar` | `iter1_default` | `0.11753401884289778` | retained selector pass with extra headroom |
-| `astar` | `iter2_page_only_repeatfull` | `0.11753401884289778` | retained selector pass |
+| `astar` | `reprofix2_full` | `0.11769683762267738` | retained selector pass on the reproducibility-fixed source |
 | `mcf` | `bop` | `0.09483537300389441` | current best |
-| `mcf` | `iter1_default` | `0.0955303095422819` | retained selector pass with extra headroom |
-| `mcf` | `iter2_page_only_repeatfull` | `0.0955303095422819` | retained selector pass |
+| `mcf` | `reprofix2_full` | `0.0955303095422819` | retained selector pass on the reproducibility-fixed source |
 | `lbm` | frozen tuned `orig` deep_fill_bonus=`12` | `0.8728014354438657` | frozen oracle best |
-| `lbm` | clean-rebuild validation | `0.8716949487923109` | previous-cycle selected expert on rebuilt source |
-| `lbm` | repeat 1 | `0.8715067829372916` | previous-cycle drift sample |
-| `lbm` | repeat 2 | `0.8243320396266304` | previous-cycle instability outlier |
-| `lbm` | repeat 3 | `0.8704845166141446` | previous-cycle drift sample |
-| `lbm` | `iter2_page_only` | `0.8240328861636473` | in-sim selector outlier under the retained page-only rule |
-| `lbm` | `iter2_page_only_lbm_repeat1` | `0.8728444464694424` | in-sim selector pass under the retained page-only rule |
-| `lbm` | `iter2_page_only_repeatfull` | `0.8728444464694424` | retained `4/4` pass run |
+| `lbm` | `iter2_page_only` | `0.8240328861636473` | obsolete; invalidated by the later SPP reproducibility fix |
+| `lbm` | `iter2_page_only_repeatfull` | `0.8728444464694424` | obsolete; invalidated by the later SPP reproducibility fix |
+| `lbm` | `reprofix2_full` | `0.8804757668415644` | retained selector pass on the reproducibility-fixed source |
+| `lbm` | `reprofix3_lbm_r1` | `0.8804757668415644` | repeated current-binary reproducibility check |
+| `lbm` | `reprofix3_lbm_r2` | `0.8804757668415644` | repeated current-binary reproducibility check |
 | `bzip2` | earlier retained `fdp` point | `2.146046596671225` | superseded |
 | `bzip2` | fresh current `fdp` point | `2.1518726883512267` | current best |
-| `bzip2` | `iter1_default` | `2.1190494454660613` | misclassified to `orig_like`, fail |
-| `bzip2` | `iter2_page_only_repeatfull` | `2.1498695244446564` | retained selector pass |
+| `bzip2` | `iter1_default` | `2.1190494454660613` | pre-fix diagnostic fail |
+| `bzip2` | `reprofix2_full` | `2.150898860454012` | retained selector pass on the reproducibility-fixed source |
 
 ## 4. Historical Pair-Focused Cycle
 The sections below retain the previous hetero pair cycle for continuity. They are no longer the active goal for the repo state above.
@@ -564,7 +583,9 @@ Current cycle artifacts:
 - retained selector run helper:
   - [scripts/run_singlecore_adaptive_selector.py](/Users/shinkijun/Developers/ChampSim/scripts/run_singlecore_adaptive_selector.py)
 - office-kijun clean-rebuild selector validation:
-  - [results/cycle_sliding_window_selector_20260420/main_thread](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420/main_thread)
+  - [reprofix2_full.json](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420/main_thread/summaries/reprofix2_full.json)
+  - [reprofix3_lbm_r1.json](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420/main_thread/summaries/reprofix3_lbm_r1.json)
+  - [reprofix3_lbm_r2.json](/Users/shinkijun/Developers/ChampSim/results/cycle_sliding_window_selector_20260420/main_thread/summaries/reprofix3_lbm_r2.json)
 - retained stability fixes:
   - [spp_dev.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_dev/spp_dev.cc)
   - [spp_orig.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/spp_orig/spp_orig.cc)

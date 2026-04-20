@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-import run_singlecore_general_selector as common
+import singlecore_eval_common as common
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
