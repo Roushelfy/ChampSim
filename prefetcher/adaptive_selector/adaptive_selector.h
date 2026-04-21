@@ -40,6 +40,20 @@ private:
     double small_delta_ratio = 0.0;
   };
 
+  struct shared_snapshot {
+    double local_pressure = 0.0;
+    double global_max_pressure = 0.0;
+    double global_avg_pressure = 0.0;
+    uint32_t bop_cores = 0;
+    uint32_t low_pressure_streak = 0;
+    uint32_t peer_ready_cores = 0;
+    bool pressure_active = false;
+    bool pair_scope_active = false;
+    bool peer_lbm_like = false;
+    bool peer_lbm_pair_like = false;
+    bool peer_high_page_growth = false;
+  };
+
   spp_orig orig_expert;
   spp_dev fdp_expert;
   bop bop_expert;
@@ -57,8 +71,12 @@ private:
   uint64_t demand_observations = 0;
   uint64_t evaluation_count = 0;
   uint64_t switch_count = 0;
+  uint64_t pressure_block_count = 0;
+  uint64_t pressure_remap_count = 0;
+  uint64_t pressure_sample_count = 0;
   uint32_t candidate_streak = 0;
   bool locked = false;
+  uint32_t cpu_index = 0;
 
   std::size_t window_size = 64;
   std::size_t eval_stride = 16;
@@ -67,6 +85,42 @@ private:
   double orig_page_growth_max = 0.40;
   double fdp_page_growth_max = 0.17;
   double orig_small_delta_min = 0.70;
+  std::size_t bop_min_observations = 0;
+  bool disable_bop = false;
+  bool shared_coord_enable = false;
+  bool shared_refresh_on_eval_only = true;
+  bool shared_pressure_use_avg = false;
+  bool shared_block_bop_switch = true;
+  bool shared_demote_bop = true;
+  bool shared_promote_fdp = false;
+  bool shared_peer_lbm_protect = false;
+  bool shared_force_bop_demote = false;
+  bool shared_pair_disable_bop = true;
+  bool shared_pair_hold_for_peer = true;
+  bool shared_pair_promote_fdp_on_peer_high_page = true;
+  double shared_pressure_on = 0.52;
+  double shared_pressure_off = 0.38;
+  uint32_t shared_pressure_streak = 16;
+  uint32_t shared_bop_grant_low_streak = 0;
+  double shared_pressure_mshr_weight = 0.60;
+  double shared_pressure_pq_weight = 0.35;
+  double shared_pressure_rq_weight = 0.15;
+  double shared_peer_lbm_rfo_min = 0.0;
+  double shared_peer_lbm_page_max = 0.0;
+  double shared_peer_lbm_small_delta_min = 0.0;
+  bool shared_pair_peer_lbm_enable = false;
+  uint32_t shared_pair_cpu_count = 2;
+  double shared_pair_peer_lbm_page_max = 0.17;
+  double shared_pair_peer_lbm_small_delta_min = 0.70;
+  double shared_peer_high_page_min = 0.40;
+  bool shared_pair_promote_fdp = false;
+  double shared_pair_orig_to_fdp_page_min = 0.17;
+  double shared_pair_orig_to_fdp_small_delta_max = 0.70;
+  double shared_orig_to_fdp_page_max = 0.0;
+  double shared_orig_to_fdp_small_delta_min = 0.0;
+  double shared_orig_to_fdp_small_delta_max = 1.0;
+  bool shared_orig_to_fdp_on_peer_high_page = false;
+  shared_snapshot last_shared{};
 
   void configure_from_env();
   void ensure_initialized(expert_mode mode);
@@ -75,6 +129,9 @@ private:
   window_features compute_window_features() const;
   expert_mode classify_window(const window_features& features) const;
   void evaluate_and_update();
+  double compute_local_pressure() const;
+  void refresh_shared_pressure();
+  expert_mode coordinate_candidate(expert_mode candidate, const window_features& features);
 
   uint32_t forward_cache_operate(expert_mode mode, champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,
                                  uint32_t metadata_in);

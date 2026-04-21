@@ -1,0 +1,67 @@
+{
+  "binary": "/Users/kijunshi/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/bin/champsim_pair_orig_fdp",
+  "controller_lines": [
+    "[FDP] Final level=1 pf_threshold=20 fill_threshold=85",
+    "[SPP_ORIG] pf_threshold=25 fill_threshold=90"
+  ],
+  "cycles": [
+    6128693,
+    150170430
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.349587644145704,
+    "rq_row_buffer_hit": 303657,
+    "rq_row_buffer_miss": 3733095
+  },
+  "env": {},
+  "instructions": [
+    5000003,
+    5000001
+  ],
+  "ipcs": [
+    0.8158351217788197,
+    0.033295509641944825
+  ],
+  "json_path": "/Users/kijunshi/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/pair_hetero_mix/loop02_orig_fdp_mcf_lbm_1M_5M.roi.json",
+  "label": "loop02_orig_fdp_mcf_lbm_1M_5M",
+  "llc_miss": [
+    739457,
+    5597989
+  ],
+  "log_path": "/Users/kijunshi/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/results/cycle_mcf_bzip2_lbm_20260420/agent_runs/pair_hetero_mix/loop02_orig_fdp_mcf_lbm_1M_5M.log",
+  "pf_accuracy": [
+    2.1298553440974932e-05,
+    0.07090197283918893
+  ],
+  "pf_issued": [
+    516467,
+    7495137
+  ],
+  "pf_useful": [
+    11,
+    531420
+  ],
+  "printed_ipcs": [
+    0.0333,
+    0.8158
+  ],
+  "resolved_workloads": [
+    "mcf",
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    null,
+    null
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "/Users/kijunshi/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/traces/429.mcf-51B.champsimtrace.xz",
+    "/Users/kijunshi/Developers/ChampSim_agents/cycle20260420_pair_hetero_mix/traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": null,
+  "workloads": [
+    "mcf",
+    "lbm"
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "binary": "./bin/champsim_adaptive_selector_2core_shared_a",
+  "controller_lines": [
+    "[SPP_ORIG] pf_threshold=25 fill_threshold=90 deep_conf_floor=15 deep_continue_step=2 deep_dominance_gap=4 deep_fill_bonus=12",
+    "[BOP] prefetch_offset=0 total_pf_issued=366359 total_pf_useful=2 accuracy=0.000545913%"
+  ],
+  "cycles": [
+    161123883,
+    6072075
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.195224810229786,
+    "rq_row_buffer_hit": 336067,
+    "rq_row_buffer_miss": 4145301
+  },
+  "env": {
+    "ADAPT_LOCK_AFTER_SWITCH": "0",
+    "ADAPT_SHARED_BLOCK_BOP_SWITCH": "0",
+    "ADAPT_SHARED_COORD_ENABLE": "1",
+    "ADAPT_SHARED_DEMOTE_BOP": "1",
+    "ADAPT_SHARED_PRESSURE_OFF": "0.38",
+    "ADAPT_SHARED_PRESSURE_ON": "0.52",
+    "ADAPT_SHARED_PRESSURE_STREAK": "16"
+  },
+  "instructions": [
+    5000003,
+    5000004
+  ],
+  "ipcs": [
+    0.031032041351684653,
+    0.8234423981917219
+  ],
+  "json_path": "results/lane_a_shared/roi/loop3_shared_demote.json",
+  "label": "loop3_shared_demote",
+  "llc_miss": [
+    919381,
+    4875302
+  ],
+  "log_path": "results/lane_a_shared/logs/loop3_shared_demote.txt",
+  "pf_accuracy": [
+    8.731384415570241e-05,
+    0.07419149822931277
+  ],
+  "pf_issued": [
+    366494,
+    8090644
+  ],
+  "pf_useful": [
+    32,
+    600257
+  ],
+  "printed_ipcs": [
+    0.03103,
+    0.8234
+  ],
+  "resolved_workloads": [
+    "mcf",
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    0.3335079473874478,
+    0.9458833421484418
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "/Users/kijunshi/Developers/ChampSim/traces/429.mcf-51B.champsimtrace.xz",
+    "/Users/kijunshi/Developers/ChampSim/traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": 1.2793912895358897,
+  "workloads": [
+    "mcf",
+    "lbm"
+  ]
+}

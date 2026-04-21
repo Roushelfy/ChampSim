@@ -1,0 +1,67 @@
+{
+  "binary": "./bin/champsim_adaptive_selector_2core",
+  "controller_lines": [
+    "[FDP] Final level=1 pf_threshold=20 fill_threshold=85",
+    "[SPP_ORIG] pf_threshold=25 fill_threshold=90 deep_conf_floor=15 deep_continue_step=2 deep_dominance_gap=4 deep_fill_bonus=12"
+  ],
+  "cycles": [
+    156325918,
+    6022119
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.237437123691079,
+    "rq_row_buffer_hit": 321250,
+    "rq_row_buffer_miss": 3969531
+  },
+  "env": {},
+  "instructions": [
+    5000001,
+    5000001
+  ],
+  "ipcs": [
+    0.03198446594121392,
+    0.8302726996925833
+  ],
+  "json_path": "results/cycle_pair_adaptive_20260421/main/roi/pair_rule3_default_r1.json",
+  "label": "pair_rule3_default_r1",
+  "llc_miss": [
+    841440,
+    5508843
+  ],
+  "log_path": "results/cycle_pair_adaptive_20260421/main/logs/pair_rule3_default_r1.txt",
+  "pf_accuracy": [
+    0.002455439213492127,
+    0.07579198922512345
+  ],
+  "pf_issued": [
+    312775,
+    7402405
+  ],
+  "pf_useful": [
+    768,
+    561043
+  ],
+  "printed_ipcs": [
+    0.03198,
+    0.8303
+  ],
+  "resolved_workloads": [
+    "mcf",
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    0.3437438569847388,
+    0.9537292685006723
+  ],
+  "simulation": 5000000,
+  "traces": [
+    "/Users/kijunshi/Developers/ChampSim/traces/429.mcf-51B.champsimtrace.xz",
+    "/Users/kijunshi/Developers/ChampSim/traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": 1.297473125485411,
+  "workloads": [
+    "mcf",
+    "lbm"
+  ]
+}

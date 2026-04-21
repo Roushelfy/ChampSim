@@ -57,7 +57,7 @@ def parse_cpu_ipc(stdout_text):
     for match in CPU_IPC_RE.finditer(stdout_text):
         cpu = int(match.group(1))
         parsed[cpu] = {
-            "ipc": float(match.group(2)),
+            "printed_ipc": float(match.group(2)),
             "instructions": int(match.group(3)),
             "cycles": int(match.group(4)),
         }
@@ -118,19 +118,22 @@ def summarize_run(roi, workloads, baselines, stdout_text):
     for idx, workload in enumerate(resolved_workloads):
         l2 = roi[f"cpu{idx}_L2C"]
         if idx in cpu_ipc:
-            ipc = cpu_ipc[idx]["ipc"]
             instructions = cpu_ipc[idx]["instructions"]
             cycles = cpu_ipc[idx]["cycles"]
-        else:
+            ipc = instructions / cycles
+        elif idx < len(roi["cores"]):
             core = roi["cores"][idx]
             instructions = core["instructions"]
             cycles = core["cycles"]
             ipc = instructions / cycles
+        else:
+            raise ValueError(f"missing core stats for cpu{idx}")
         pf_issued = l2["prefetch issued"]
         pf_useful = l2["useful prefetch"]
         baseline = baselines.get(workload)
 
         summary["ipcs"].append(ipc)
+        summary.setdefault("printed_ipcs", []).append(cpu_ipc.get(idx, {}).get("printed_ipc"))
         summary["instructions"].append(instructions)
         summary["cycles"].append(cycles)
         summary["pf_issued"].append(pf_issued)
