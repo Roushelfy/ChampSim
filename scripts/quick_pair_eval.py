@@ -9,8 +9,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+import singlecore_eval_common as common
 
-CONTROLLER_RE = re.compile(r"^\[(?:BWC(?:_[A-Z]+)*|BWC_GSP_TIERED|FDP|SPP_ORIG|BOP)\].*$", re.MULTILINE)
+CONTROLLER_RE = re.compile(r"^\[(?:ADAPTIVE_SELECTOR|BWC(?:_[A-Z]+)*|BWC_GSP_TIERED|FDP|SPP_ORIG|BOP)\].*$", re.MULTILINE)
 TRACE_WORKLOAD_RE = re.compile(r"^\d+\.([A-Za-z0-9_]+)")
 CPU_IPC_RE = re.compile(r"CPU (\d+) cumulative IPC:\s*([0-9.]+)\s+instructions:\s*(\d+)\s+cycles:\s*(\d+)")
 CPU_RUN_RE = re.compile(r"CPU (\d+) runs (\S+)")
@@ -206,6 +207,8 @@ def main():
         {
             "label": args.label,
             "binary": args.binary,
+            "binary_sha256": common.file_sha256(args.binary),
+            "source_fingerprints": common.source_fingerprints(),
             "workloads": workloads,
             "traces": args.trace,
             "warmup": args.warmup,

@@ -115,6 +115,7 @@ def source_fingerprints():
         PROJECT_ROOT / "prefetcher" / "bop" / "bop.cc",
         PROJECT_ROOT / "prefetcher" / "bop" / "bop.h",
         PROJECT_ROOT / "configs" / "adaptive_selector_config.json",
+        PROJECT_ROOT / "configs" / "adaptive_selector_2core.json",
     ]
     for path in tracked:
         if path.exists():

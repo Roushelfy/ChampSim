@@ -5,21 +5,24 @@ This is the single active report for the current repo state.
 - date: `2026-04-21`
 - host: `office-kijun`
 - run length: `1M warmup + 5M simulation`
-- active goal: signal-based adaptive selector that keeps at least `85%` of the current retained gain on all single-core workloads and on `2-core mcf + lbm`
-- status: achieved in this cycle; the retained artifact is a pair-safe adaptive selector with one-shot `orig/fdp` coordination in `2-core mcf + lbm`
+- active goal: signal-based adaptive selector that achieves `+0.5%` over `orig` on `2-core astar + lbm` and `2-core bzip2 + lbm`, while keeping at least `85%` of the retained gain on all single-core workloads and on `2-core mcf + lbm`
+- status: achieved in this cycle; the retained artifact is the current `adaptive_selector` with narrow pair-only probe-delay around the `two-low-page` split
 
 Latest retained result:
 
-- single-core retained exact IPCs remain the same as the previous `rule2` selector:
+- single-core retained exact IPCs, revalidated on the current-source hash:
   - `astar = 0.11769683762267738`
   - `mcf = 0.0955303095422819`
   - `lbm = 0.8874912094048452`
   - `bzip2 = 2.150898860454012`
-- new retained `2-core mcf + lbm` adaptive result:
-  - `weighted_speedup = 1.297473125485411`
-  - `orig_orig` baseline `= 1.282646900577691`
-  - retained static `orig_fdp = 1.294978831807267`
-- this new adaptive point clears the pair `85%` threshold and also exceeds the previous retained static winner
+- retained pair exact WSs on the same current-source hash:
+  - `astar + lbm = 1.3751206958751774` vs `orig_orig = 1.3562017695341675` (`+1.3950%`)
+  - `bzip2 + lbm = 1.9496149302999837` vs `orig_orig = 1.9383916294876093` (`+0.5790%`)
+  - `mcf + lbm = 1.297473125485411` vs `orig_orig = 1.282646900577691` (`+1.1559%`)
+- every current gate clears:
+  - all four single-core workloads keep `100%` of the retained gain
+  - `mcf + lbm` keeps `100%` of the retained pair gain
+  - `astar + lbm` and `bzip2 + lbm` both clear the final `+0.5%` WS goal
 - repo cleanup state:
   - active retained prefetcher: `adaptive_selector`
   - retained internal expert/build dependencies only: `bop`, `spp_orig`, `spp_dev`, `no`
@@ -35,51 +38,53 @@ Current retained single-core `85%` thresholds:
 | `lbm` | `0.8874912094048452` | `0.8849506075610004` |
 | `bzip2` | `2.150898860454012` | `2.148157634794696` |
 
-Current retained pair target:
+Current retained pair targets:
 
-| item | exact value |
-|---|---:|
-| `orig_orig` pair baseline WS | `1.282646900577691` |
-| retained best overall pair WS (`rule3`) | `1.297473125485411` |
-| current forward `85%` minimum acceptable pair WS | `1.295249191749253` |
+| pair | `orig_orig` baseline WS | retained exact WS | `85%` minimum acceptable WS | final `+0.5%` target |
+|---|---:|---:|---:|---:|
+| `astar + lbm` | `1.3562017695341675` | `1.3751206958751774` | `1.372282856924026` | `1.3629827783818382` |
+| `bzip2 + lbm` | `1.9383916294876093` | `1.9496149302999837` | `1.9479314351781276` | `1.948083587635047` |
+| `mcf + lbm` | `1.282646900577691` | `1.297473125485411` | `1.295249191749253` | `1.2890601350805793` |
 
-## 2. 2026-04-21 Pair-Safe Adaptive Result
+## 2. 2026-04-21 Generalized Pair Result
 
 What changed in code:
 
-- the multicore path in [adaptive_selector.h](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.h) and [adaptive_selector.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.cc) was simplified into a pair-safe one-shot coordinator
-- shared coordination is now refreshed at evaluation time by default instead of every cycle
-- `2-core` pair mode now defaults to:
-  - hold until the peer window is ready
-  - demote `bop -> orig` for the `high_page` side
-  - promote `orig -> fdp` for the `low_page` side when the peer is `high_page`
-  - lock after the first committed switch
-- a combined regression runner was added at [run_adaptive_retention_suite.py](/Users/shinkijun/Developers/ChampSim/scripts/run_adaptive_retention_suite.py)
+- the pair path in [adaptive_selector.h](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.h) and [adaptive_selector.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.cc) keeps the old `rule3` high-page/low-page split for `mcf + lbm` and `astar + lbm`
+- the new addition is a narrow `required_streak` override in [adaptive_selector.cc](/Users/shinkijun/Developers/ChampSim/prefetcher/adaptive_selector/adaptive_selector.cc:693) for exactly two pair-only cases:
+  - low-page medium-delta core whose base `fdp` decision gets remapped to `orig` by `two-low-page split`
+  - low-page dense peer of that same medium-delta core
+- default knobs stay generic:
+  - `decision_streak=2`
+  - `shared_pair_low_page_probe_page_max=0.20`
+  - `shared_pair_low_page_probe_small_delta_max=0.70`
+  - `shared_pair_low_page_probe_streak=3`
+- retained-suite infrastructure was generalized in [adaptive_targets.py](/Users/shinkijun/Developers/ChampSim/scripts/adaptive_targets.py) and [run_adaptive_retention_suite.py](/Users/shinkijun/Developers/ChampSim/scripts/run_adaptive_retention_suite.py) so the repo now tracks `single-core 4 + pair 3` in one schema
 
 Idea families explored in this cycle:
 
-1. current adaptive baseline on `2-core mcf + lbm`
-2. low-page `orig -> fdp` promotion under shared pressure
-3. peer-aware `bop -> orig` protection for `lbm`-like peers
-4. `promote_fdp + peerprotect` with unlock
-5. `promote_fdp + peerprotect` with lock-after-first-switch
-6. high-page peer signal for earlier `orig -> fdp` promotion
-7. execution-policy tuning: `3-way parallel` vs `single-run sequential`
-8. pair-safe one-shot `orig/fdp` split with evaluation-time shared snapshots only
+1. direct transfer of the old `mcf + lbm` pair-safe rule into `astar + lbm` and `bzip2 + lbm`
+2. global `ADAPT_DECISION_STREAK=3`
+3. low-page `fdp`-candidate probe delay
+4. `two-low-page split` remap-to-`orig` probe delay
+5. low-page dense peer probe delay
+6. `small_delta_ratio` boundary tuning inside the low-page band
+7. retained-suite generalization to `single-core 4 + pair 3`
+8. remote execution hygiene: subdir-safe sync and stale child-process cleanup
 
 Subagent support used in parallel:
 
-- idea-family analysis and knob design
-- pair-aware selector patch proposal
-- retained-suite script proposal
-- runtime-cost diagnosis showing that the earlier `10-13m` aborts were premature relative to the actual `15m+` pair runtime
+- early-window feature analysis showing that `small_delta_ratio` is the missing signal separating `bzip2` from `lbm` inside low-page windows
+- pair-rule diagnosis showing that the real failure was not generic `fdp` delay, but early `fdp -> orig` remap under `two-low-page split`
+- retained-suite/report checklist for freezing `pair 3` alongside `single-core 4`
 
 Exact retained source-of-truth files for this cycle:
 
-- pair summary: [pair_rule3_default_r1.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_adaptive_20260421/main/summaries/pair_rule3_default_r1.json)
-- pair raw log: [pair_rule3_default_r1.txt](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_adaptive_20260421/main/logs/pair_rule3_default_r1.txt)
-- single-core aggregate: [rule3_singlecore_aggregate.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_adaptive_20260421/main/single/summaries/rule3_singlecore_aggregate.json)
-- full local aggregate: [rule3_retention_suite.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_adaptive_20260421/main/summaries/rule3_retention_suite.json)
+- combined current aggregate: [final_retention_suite.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_general_20260421/final_retention_suite.json)
+- single-core aggregate: [single_core_aggregate.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_general_20260421/single_confirm_v3/single_core_aggregate.json)
+- `astar + lbm`: [P3_astar_lbm_dualprobe_r1.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_general_20260421/narrow_probe_v3/astar_lbm/summaries/P3_astar_lbm_dualprobe_r1.json)
+- `bzip2 + lbm`: [P2_bzip2_lbm_dualprobe_r1.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_general_20260421/narrow_probe_v3/bzip2_lbm/summaries/P2_bzip2_lbm_dualprobe_r1.json)
+- `mcf + lbm`: [P3_mcf_lbm_dualprobe_r1.json](/Users/shinkijun/Developers/ChampSim/results/cycle_pair_general_20260421/narrow_probe_v3/mcf_lbm/summaries/P3_mcf_lbm_dualprobe_r1.json)
 
 ## 3. Quantitative Outcome
 
@@ -92,54 +97,69 @@ Single-core validation:
 | `lbm` | `0.8874912094048452` | `+0.01693734562563154` (`+1.9456%`) | `100%` | pass |
 | `bzip2` | `2.150898860454012` | `+0.018274837728774695` (`+0.8569%`) | `100%` | pass |
 
-`2-core mcf + lbm` validation:
+Pair validation:
 
-| item | exact value |
-|---|---:|
-| adaptive `rule3` WS | `1.297473125485411` |
-| `orig_orig` baseline WS | `1.282646900577691` |
-| retained static `orig_fdp` WS | `1.294978831807267` |
-| previous-cycle pair `85%` minimum WS | `1.2931290421228305` |
-| new forward pair `85%` minimum WS | `1.295249191749253` |
-| adaptive delta vs `orig_orig` | `+0.01482622490772001` (`+1.1559%`) |
-| adaptive delta vs static `orig_fdp` | `+0.0024942936781440217` (`+0.1926%`) |
-| gain retention vs previous retained pair target | `120.2263%` |
+| pair | exact WS | delta vs `orig_orig` | retained/final gate |
+|---|---:|---:|---|
+| `astar + lbm` | `1.3751206958751774` | `+0.01891892634100989` (`+1.3950%`) | pass `+0.5%`, pass `85%` |
+| `bzip2 + lbm` | `1.9496149302999837` | `+0.011223300812374326` (`+0.5790%`) | pass `+0.5%`, pass `85%` |
+| `mcf + lbm` | `1.297473125485411` | `+0.01482622490772001` (`+1.1559%`) | pass retained `85%` |
 
 Interpretation:
 
-- the retained pair winner is no longer static `orig_fdp`; it is now the adaptive selector itself
-- the pair log shows that the winner used runtime signal only:
-  - `cpu0`: `page_growth=0.96875`, `small_delta_ratio=0.0`, switched to `orig`
-  - `cpu1`: `page_growth=0.03125`, `small_delta_ratio=0.984127`, switched to `fdp`
-- this reproduces the beneficial `orig/fdp` split without workload IDs
-- the earlier runtime-barrier hypothesis was false; the pair run simply needed to be allowed to complete
+- `astar + lbm` stays on the original pair-safe behavior:
+  - `astar` side: high-page sparse window (`page_growth=0.65625`, `small_delta_ratio=0.15873`) -> `bop`
+  - `lbm` side: low-page dense peer of a high-page core (`0.078125`, `0.936508`) -> `fdp`
+- `mcf + lbm` also stays on the old pair-safe behavior:
+  - `mcf` side: very high-page sparse window (`0.96875`, `0.0`) -> `orig`
+  - `lbm` side: low-page dense peer of a high-page core (`0.03125`, `0.984127`) -> `fdp`
+- `bzip2 + lbm` is the only pair that needed the new logic:
+  - default transfer had `bzip2` lock too early to `orig` at `80` refs and `lbm` still commit at `496` refs, giving only `1.9409379080250022` WS
+  - the final dual-probe rule delays only the affected low-page cases to `96` and `512` refs, reproducing the old global-`streak=3` timing while keeping global `decision_streak=2`
 
 ## 4. Main Conclusion
 
 The current retained best overall results are now:
 
-- best overall single-core adaptive point: retained `rule2`
-- best overall `2-core mcf + lbm` point: adaptive `rule3`
+- best overall single-core adaptive point: current `adaptive_selector`, exact revalidation `4/4`
+- best overall pair set:
+  - `astar + lbm`: adaptive selector `1.3751206958751774`
+  - `bzip2 + lbm`: adaptive selector `1.9496149302999837`
+  - `mcf + lbm`: adaptive selector `1.297473125485411`
 
 Why this artifact is the right retained one:
 
 - it keeps the previous single-core retained behavior exactly
-- it adds a narrow pair-safe override only when there are two cores and the peer window is ready
+- it keeps the old `mcf + lbm` / `astar + lbm` pair-safe split intact
+- it adds a narrow pair-only override only when there are two low-page peers and one of them sits in the `bzip2`-like medium-delta band
 - it uses only generic runtime features:
   - `page_growth`
   - `small_delta_ratio`
   - peer readiness
   - peer `high_page` detection
+  - peer low-page density gap
 - it clears every current gate:
   - all four single-core workloads pass the `85%` minimum
-  - `2-core mcf + lbm` passes the pair `85%` minimum
-  - the adaptive pair point beats the previous retained static winner
+  - `2-core mcf + lbm` passes the retained pair `85%` minimum
+  - `2-core astar + lbm` and `2-core bzip2 + lbm` both clear the final `+0.5%` WS goal
+
+Why the failed intermediate ideas failed:
+
+1. global `ADAPT_DECISION_STREAK=3` was too broad
+   - it rescued `bzip2 + lbm`, but `mcf + lbm` fell to `1.2908090548022133`
+   - that is `+0.6364%` over baseline but still `0.004440136947039708` below the retained `85%` floor
+2. delaying only the remapped `bzip2` core was not enough
+   - `P1_bzip2_lbm_origprobe_r1 = 1.9409379080250022`
+   - it improved over default by `+0.0007046690978338421`, but still missed the `+0.5%` goal by `0.007145679610044864`
+3. the final dual-probe rule closes exactly that remaining gap
+   - it reproduces the successful `bzip2` timing (`96` refs) and also delays the dense `lbm` peer to `512` refs
+   - it is inert on `astar + lbm` and `mcf + lbm`, so those pairs keep their old wins unchanged
 
 Most likely improvement directions from here:
 
 1. keep the multicore path narrow and pair-safe instead of reintroducing a rich continuous controller
-2. if more multicore pairs are added later, generalize the current `high_page/low_page_dense` split before adding heavier shared logic
-3. only reintroduce pressure-gated continuous remap if a new pair cannot be covered by the current one-shot rule
+2. if more pairs are added later, first generalize the current `low-page medium-delta` vs `low-page dense` boundary before adding heavier shared-pressure logic
+3. only reintroduce pressure-gated continuous remap if a new pair cannot be covered by pair-only `required_streak` overrides
 
 ## 5. Historical 2026-04-21 Early Barrier Note
 
@@ -250,7 +270,22 @@ ln -sfn /Users/kijunshi/Developers/ChampSim/vcpkg_installed vcpkg_installed
 ln -sfn /Users/kijunshi/Developers/ChampSim/traces traces
 ```
 
-Build, always sequential:
+Sync only into the real subdirectories:
+
+```bash
+rsync -av prefetcher/adaptive_selector/ \
+  office-kijun:/Users/kijunshi/Developers/ChampSim_pair_adapt_20260421/prefetcher/adaptive_selector/
+
+rsync -av scripts/adaptive_targets.py scripts/run_pair_eval.py \
+  scripts/run_adaptive_retention_suite.py scripts/run_mcf_lbm_2core_eval.py \
+  scripts/quick_pair_eval.py scripts/singlecore_eval_common.py \
+  office-kijun:/Users/kijunshi/Developers/ChampSim_pair_adapt_20260421/scripts/
+
+rsync -av configs/adaptive_selector_2core.json \
+  office-kijun:/Users/kijunshi/Developers/ChampSim_pair_adapt_20260421/configs/
+```
+
+Build, always sequential, and never mix `1-core` and `2-core` in one workspace:
 
 ```bash
 rm -f _configuration.mk
@@ -258,33 +293,40 @@ make configclean
 ./config.sh configs/adaptive_selector_config.json
 make -j4 bin/champsim_adaptive_selector
 
-python3 scripts/generate_hetero_2core_config.py \
-  --base-config configs/orig_2core.json \
-  --core0-prefetcher adaptive_selector \
-  --core1-prefetcher adaptive_selector \
-  --executable-name champsim_adaptive_selector_2core \
-  --output /tmp/adaptive_selector_2core.json
-
 rm -f _configuration.mk
 make configclean
-./config.sh /tmp/adaptive_selector_2core.json
+./config.sh configs/adaptive_selector_2core.json
 make -j4 bin/champsim_adaptive_selector_2core
 ```
 
-Validate:
+Run one pair:
+
+```bash
+python3 scripts/run_pair_eval.py \
+  --binary ./bin/champsim_adaptive_selector_2core \
+  --label candidate_name \
+  --results-dir results/cycle_pair_general_20260421/candidate_name \
+  --workload astar \
+  --workload lbm \
+  --baseline-ipc astar=0.11624407059812944 \
+  --baseline-ipc lbm=0.8705538637792136
+```
+
+Retained-suite style validation:
 
 ```bash
 python3 scripts/run_adaptive_retention_suite.py \
   --single-binary ./bin/champsim_adaptive_selector \
   --pair-binary ./bin/champsim_adaptive_selector_2core \
   --label candidate_name \
-  --results-dir results/cycle_pair_adaptive_20260421
+  --results-dir results/cycle_pair_general_20260421/candidate_name
 ```
 
 Guardrails:
 
-- never build `1-core` and `2-core` configs concurrently in the same workspace
-- avoid `3-way` parallel pair runs
+- never rsync source files into the remote repo root; always target `prefetcher/...`, `scripts/`, or `configs/`
+- when killing stale experiments, kill child `quick_pair_eval.py` and `champsim_*` processes too, not just the launcher PID
+- use a separate remote workspace if `1-core` and `2-core` need to run in parallel
 - do not abort `mcf+lbm` just because there is no summary at `10-13m`; the retained adaptive winner took `15m12.94s`
 
 ## Historical Archive: Single-Core Sliding-Window Selector

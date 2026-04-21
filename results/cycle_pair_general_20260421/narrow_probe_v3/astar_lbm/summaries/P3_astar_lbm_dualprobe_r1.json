@@ -1,0 +1,86 @@
+{
+  "binary": "./bin/champsim_adaptive_selector_2core",
+  "binary_sha256": "e208eede0b9cdabc45380f14b582810ef6975a68162ae03fbac57672b65394b2",
+  "controller_lines": [
+    "[ADAPTIVE_SELECTOR] init cpu=1 cache_name=cpu1_L2C window_size=64 eval_stride=16 decision_streak=2 lock_after_switch=1 initial_mode=none orig_page_growth_max=0.4 fdp_page_growth_max=0.17 orig_small_delta_min=0.7 bop_min_observations=0 disable_bop=0 shared_coord_enable=1 shared_refresh_on_eval_only=1 shared_pressure_use_avg=0 shared_block_bop_switch=1 shared_demote_bop=1 shared_promote_fdp=0 shared_peer_lbm_protect=0 shared_force_bop_demote=0 shared_pair_disable_bop=1 shared_pair_hold_for_peer=1 shared_pair_promote_fdp_on_peer_high_page=1 shared_pressure_on=0.52 shared_pressure_off=0.38 shared_pressure_streak=16 shared_bop_grant_low_streak=0 shared_peer_lbm_rfo_min=0 shared_peer_lbm_page_max=0 shared_peer_lbm_small_delta_min=0 shared_pair_peer_lbm_enable=0 shared_pair_cpu_count=2 shared_pair_peer_lbm_page_max=0.17 shared_pair_peer_lbm_small_delta_min=0.7 shared_peer_high_page_min=0.4 shared_pair_promote_fdp=0 shared_pair_orig_to_fdp_page_min=0.17 shared_pair_orig_to_fdp_small_delta_max=0.7 shared_pair_two_low_page_split=1 shared_pair_low_page_max=0.18 shared_pair_dense_delta_gap=0.18 shared_pair_bop_probation_enable=1 shared_pair_bop_page_min=0.45 shared_pair_bop_page_max=0.85 shared_pair_bop_peer_page_max=0.17 shared_pair_bop_peer_small_delta_min=0.7 shared_pair_bop_pressure_max=0.42 shared_pair_low_page_fdp_probe_delay_enable=1 shared_pair_low_page_probe_page_max=0.2 shared_pair_low_page_probe_small_delta_max=0.7 shared_pair_low_page_probe_streak=3 shared_orig_to_fdp_page_max=0 shared_orig_to_fdp_small_delta_min=0 shared_orig_to_fdp_small_delta_max=1 shared_orig_to_fdp_on_peer_high_page=0",
+    "[ADAPTIVE_SELECTOR] init cpu=0 cache_name=cpu0_L2C window_size=64 eval_stride=16 decision_streak=2 lock_after_switch=1 initial_mode=none orig_page_growth_max=0.4 fdp_page_growth_max=0.17 orig_small_delta_min=0.7 bop_min_observations=0 disable_bop=0 shared_coord_enable=1 shared_refresh_on_eval_only=1 shared_pressure_use_avg=0 shared_block_bop_switch=1 shared_demote_bop=1 shared_promote_fdp=0 shared_peer_lbm_protect=0 shared_force_bop_demote=0 shared_pair_disable_bop=1 shared_pair_hold_for_peer=1 shared_pair_promote_fdp_on_peer_high_page=1 shared_pressure_on=0.52 shared_pressure_off=0.38 shared_pressure_streak=16 shared_bop_grant_low_streak=0 shared_peer_lbm_rfo_min=0 shared_peer_lbm_page_max=0 shared_peer_lbm_small_delta_min=0 shared_pair_peer_lbm_enable=0 shared_pair_cpu_count=2 shared_pair_peer_lbm_page_max=0.17 shared_pair_peer_lbm_small_delta_min=0.7 shared_peer_high_page_min=0.4 shared_pair_promote_fdp=0 shared_pair_orig_to_fdp_page_min=0.17 shared_pair_orig_to_fdp_small_delta_max=0.7 shared_pair_two_low_page_split=1 shared_pair_low_page_max=0.18 shared_pair_dense_delta_gap=0.18 shared_pair_bop_probation_enable=1 shared_pair_bop_page_min=0.45 shared_pair_bop_page_max=0.85 shared_pair_bop_peer_page_max=0.17 shared_pair_bop_peer_small_delta_min=0.7 shared_pair_bop_pressure_max=0.42 shared_pair_low_page_fdp_probe_delay_enable=1 shared_pair_low_page_probe_page_max=0.2 shared_pair_low_page_probe_small_delta_max=0.7 shared_pair_low_page_probe_streak=3 shared_orig_to_fdp_page_max=0 shared_orig_to_fdp_small_delta_min=0 shared_orig_to_fdp_small_delta_max=1 shared_orig_to_fdp_on_peer_high_page=0",
+    "[ADAPTIVE_SELECTOR] switch cpu=0 demand_observations=80 from=none to=bop streak=2 required_streak=2 pressure_active=0 local_pressure=0.0234375 global_pressure=0.0234375 peer_pressure=0.01875 peer_page_growth=0.09375 peer_small_delta_ratio=0.873016 rfo_share=0 line_growth=1 page_growth=0.65625 small_delta_ratio=0.15873",
+    "[ADAPTIVE_SELECTOR] switch cpu=1 demand_observations=96 from=none to=fdp streak=2 required_streak=2 pressure_active=0 local_pressure=0.0375 global_pressure=0.0375 peer_pressure=0.0234375 peer_page_growth=0.65625 peer_small_delta_ratio=0.15873 rfo_share=0 line_growth=1 page_growth=0.078125 small_delta_ratio=0.936508",
+    "[ADAPTIVE_SELECTOR] final cpu=1 active_mode=fdp evaluations=3 switches=1 pressure_blocks=0 pressure_remaps=2 pressure_samples=3 locked=1 demand_observations=614672 last_candidate=fdp last_local_pressure=0.0375 last_global_max_pressure=0.0375 last_global_avg_pressure=0.0304687 last_bop_cores=1 last_low_pressure_streak=4 shared_pressure_active=0 pair_scope_active=1 peer_lbm_like=0 peer_lbm_pair_like=0 peer_high_page_growth=1 peer_pressure=0.0234375 peer_page_growth=0.65625 peer_line_growth=1 peer_small_delta_ratio=0.15873 last_rfo_share=0 last_line_growth=1 last_page_growth=0.078125 last_small_delta_ratio=0.936508",
+    "[FDP] Final level=1 pf_threshold=20 fill_threshold=85",
+    "[ADAPTIVE_SELECTOR] final cpu=0 active_mode=bop evaluations=2 switches=1 pressure_blocks=0 pressure_remaps=0 pressure_samples=2 locked=1 demand_observations=195946 last_candidate=bop last_local_pressure=0.0234375 last_global_max_pressure=0.0234375 last_global_avg_pressure=0.0210938 last_bop_cores=0 last_low_pressure_streak=3 shared_pressure_active=0 pair_scope_active=1 peer_lbm_like=0 peer_lbm_pair_like=1 peer_high_page_growth=0 peer_pressure=0.01875 peer_page_growth=0.09375 peer_line_growth=1 peer_small_delta_ratio=0.873016 last_rfo_share=0 last_line_growth=1 last_page_growth=0.65625 last_small_delta_ratio=0.15873",
+    "[BOP] prefetch_offset=1 total_pf_issued=111534 total_pf_useful=0 accuracy=0%"
+  ],
+  "cycles": [
+    107247819,
+    5896431
+  ],
+  "dram": {
+    "avg_dbus_congested_cycle": 7.296021736419338,
+    "rq_row_buffer_hit": 216101,
+    "rq_row_buffer_miss": 2614866
+  },
+  "env": {},
+  "instructions": [
+    5000004,
+    5000002
+  ],
+  "ipcs": [
+    0.046621031985741364,
+    0.8479709166443227
+  ],
+  "json_path": "results/cycle_pair_general_20260421/narrow_probe_v3/astar_lbm/roi/P3_astar_lbm_dualprobe_r1.json",
+  "label": "P3_astar_lbm_dualprobe_r1",
+  "llc_miss": [
+    483835,
+    3725831
+  ],
+  "log_path": "results/cycle_pair_general_20260421/narrow_probe_v3/astar_lbm/logs/P3_astar_lbm_dualprobe_r1.txt",
+  "pf_accuracy": [
+    0.0,
+    0.0756766680412305
+  ],
+  "pf_issued": [
+    95991,
+    4978549
+  ],
+  "pf_useful": [
+    0,
+    376760
+  ],
+  "printed_ipcs": [
+    0.04662,
+    0.848
+  ],
+  "resolved_workloads": [
+    "astar",
+    "lbm"
+  ],
+  "retention_vs_orig": [
+    0.4010615917513437,
+    0.9740591041238336
+  ],
+  "simulation": 5000000,
+  "source_fingerprints": {
+    "configs/adaptive_selector_2core.json": "2864bc6e6de69f8270c1dca7b8a9ba90da4f476465e3cb70add65bbf233fca1f",
+    "configs/adaptive_selector_config.json": "352b66b113bb6345571f0105e7d0b4168c4433bc8c04bd02beafd575bcdb3fb5",
+    "prefetcher/adaptive_selector/adaptive_selector.cc": "1802b85f6902118b3cff3a4ba5da9054010349571f1683acb075ed33ae3c2eb9",
+    "prefetcher/adaptive_selector/adaptive_selector.h": "09abdc46d4218fc5c02e24bdbe7f106d98e3992133b15bec621ba9f9962ac257",
+    "prefetcher/bop/bop.cc": "401e8a4467aa97c8aa9c55ee47e3ebaf52cc817d79c0947172e0553f224c1947",
+    "prefetcher/bop/bop.h": "bd14aa44d3e249df6f3fbdf8f57f3872f2263abe67cd290937d9af7c8b97adf7",
+    "prefetcher/spp_dev/spp_dev.cc": "c1ea5268154d88f66c7c02256ce040299ff11aacd860ef8a8ff7f274276de748",
+    "prefetcher/spp_dev/spp_dev.h": "784af5b95efb14475d1598a0d552a040bd199db3e3173b094462085785638cfd",
+    "prefetcher/spp_orig/spp_orig.cc": "f5607455ed136f2a0c511fa496d815648258f5e8d8887d1106d2d81654e971f2",
+    "prefetcher/spp_orig/spp_orig.h": "2ce711e34b94dd25fd2ddcd96a0bb45247120f2298e85b44aebfb5d1a0bfd36c"
+  },
+  "traces": [
+    "/Users/kijunshi/Developers/ChampSim/traces/473.astar-359B.champsimtrace.xz",
+    "/Users/kijunshi/Developers/ChampSim/traces/470.lbm-1274B.champsimtrace.xz"
+  ],
+  "warmup": 1000000,
+  "weighted_speedup": 1.3751206958751774,
+  "workloads": [
+    "astar",
+    "lbm"
+  ]
+}

@@ -60,6 +60,7 @@ struct selector_shared_state {
   std::vector<uint8_t> active_modes{};
   std::vector<double> recent_rfo_share{};
   std::vector<double> recent_page_growth{};
+  std::vector<double> recent_line_growth{};
   std::vector<double> recent_small_delta_ratio{};
   bool pressure_active = false;
   uint32_t high_streak = 0;
@@ -74,6 +75,7 @@ selector_shared_state& get_selector_shared_state()
     state.active_modes.assign(NUM_CPUS, 0);
     state.recent_rfo_share.assign(NUM_CPUS, 0.0);
     state.recent_page_growth.assign(NUM_CPUS, 0.0);
+    state.recent_line_growth.assign(NUM_CPUS, 0.0);
     state.recent_small_delta_ratio.assign(NUM_CPUS, 0.0);
     state.pressure_active = false;
     state.high_streak = 0;
@@ -176,6 +178,19 @@ void adaptive_selector::prefetcher_initialize()
             << " shared_pair_promote_fdp=" << shared_pair_promote_fdp
             << " shared_pair_orig_to_fdp_page_min=" << shared_pair_orig_to_fdp_page_min
             << " shared_pair_orig_to_fdp_small_delta_max=" << shared_pair_orig_to_fdp_small_delta_max
+            << " shared_pair_two_low_page_split=" << shared_pair_two_low_page_split
+            << " shared_pair_low_page_max=" << shared_pair_low_page_max
+            << " shared_pair_dense_delta_gap=" << shared_pair_dense_delta_gap
+            << " shared_pair_bop_probation_enable=" << shared_pair_bop_probation_enable
+            << " shared_pair_bop_page_min=" << shared_pair_bop_page_min
+            << " shared_pair_bop_page_max=" << shared_pair_bop_page_max
+            << " shared_pair_bop_peer_page_max=" << shared_pair_bop_peer_page_max
+            << " shared_pair_bop_peer_small_delta_min=" << shared_pair_bop_peer_small_delta_min
+            << " shared_pair_bop_pressure_max=" << shared_pair_bop_pressure_max
+            << " shared_pair_low_page_fdp_probe_delay_enable=" << shared_pair_low_page_fdp_probe_delay_enable
+            << " shared_pair_low_page_probe_page_max=" << shared_pair_low_page_probe_page_max
+            << " shared_pair_low_page_probe_small_delta_max=" << shared_pair_low_page_probe_small_delta_max
+            << " shared_pair_low_page_probe_streak=" << shared_pair_low_page_probe_streak
             << " shared_orig_to_fdp_page_max=" << shared_orig_to_fdp_page_max
             << " shared_orig_to_fdp_small_delta_min=" << shared_orig_to_fdp_small_delta_min
             << " shared_orig_to_fdp_small_delta_max=" << shared_orig_to_fdp_small_delta_max
@@ -246,6 +261,10 @@ void adaptive_selector::prefetcher_final_stats()
             << " peer_lbm_like=" << last_shared.peer_lbm_like
             << " peer_lbm_pair_like=" << last_shared.peer_lbm_pair_like
             << " peer_high_page_growth=" << last_shared.peer_high_page_growth
+            << " peer_pressure=" << last_shared.peer_pressure
+            << " peer_page_growth=" << last_shared.peer_page_growth
+            << " peer_line_growth=" << last_shared.peer_line_growth
+            << " peer_small_delta_ratio=" << last_shared.peer_small_delta_ratio
             << " last_rfo_share=" << last_features.rfo_share
             << " last_line_growth=" << last_features.line_growth
             << " last_page_growth=" << last_features.page_growth
@@ -325,6 +344,24 @@ void adaptive_selector::configure_from_env()
   shared_pair_orig_to_fdp_page_min = read_double_env("ADAPT_SHARED_PAIR_ORIG_TO_FDP_PAGE_MIN", shared_pair_orig_to_fdp_page_min);
   shared_pair_orig_to_fdp_small_delta_max =
       read_double_env("ADAPT_SHARED_PAIR_ORIG_TO_FDP_SMALL_DELTA_MAX", shared_pair_orig_to_fdp_small_delta_max);
+  shared_pair_two_low_page_split = read_bool_env("ADAPT_SHARED_PAIR_TWO_LOW_PAGE_SPLIT", shared_pair_two_low_page_split);
+  shared_pair_low_page_max = read_double_env("ADAPT_SHARED_PAIR_LOW_PAGE_MAX", shared_pair_low_page_max);
+  shared_pair_dense_delta_gap = read_double_env("ADAPT_SHARED_PAIR_DENSE_DELTA_GAP", shared_pair_dense_delta_gap);
+  shared_pair_bop_probation_enable = read_bool_env("ADAPT_SHARED_PAIR_BOP_PROBATION_ENABLE", shared_pair_bop_probation_enable);
+  shared_pair_bop_page_min = read_double_env("ADAPT_SHARED_PAIR_BOP_PAGE_MIN", shared_pair_bop_page_min);
+  shared_pair_bop_page_max = read_double_env("ADAPT_SHARED_PAIR_BOP_PAGE_MAX", shared_pair_bop_page_max);
+  shared_pair_bop_peer_page_max = read_double_env("ADAPT_SHARED_PAIR_BOP_PEER_PAGE_MAX", shared_pair_bop_peer_page_max);
+  shared_pair_bop_peer_small_delta_min =
+      read_double_env("ADAPT_SHARED_PAIR_BOP_PEER_SMALL_DELTA_MIN", shared_pair_bop_peer_small_delta_min);
+  shared_pair_bop_pressure_max = read_double_env("ADAPT_SHARED_PAIR_BOP_PRESSURE_MAX", shared_pair_bop_pressure_max);
+  shared_pair_low_page_fdp_probe_delay_enable =
+      read_bool_env("ADAPT_SHARED_PAIR_LOW_PAGE_FDP_PROBE_DELAY_ENABLE", shared_pair_low_page_fdp_probe_delay_enable);
+  shared_pair_low_page_probe_page_max =
+      read_double_env("ADAPT_SHARED_PAIR_LOW_PAGE_PROBE_PAGE_MAX", shared_pair_low_page_probe_page_max);
+  shared_pair_low_page_probe_small_delta_max =
+      read_double_env("ADAPT_SHARED_PAIR_LOW_PAGE_PROBE_SMALL_DELTA_MAX", shared_pair_low_page_probe_small_delta_max);
+  shared_pair_low_page_probe_streak =
+      std::max<uint32_t>(1, read_u32_env("ADAPT_SHARED_PAIR_LOW_PAGE_PROBE_STREAK", shared_pair_low_page_probe_streak));
   shared_orig_to_fdp_page_max = read_double_env("ADAPT_SHARED_ORIG_TO_FDP_PAGE_MAX", shared_orig_to_fdp_page_max);
   shared_orig_to_fdp_small_delta_min = read_double_env("ADAPT_SHARED_ORIG_TO_FDP_SMALL_DELTA_MIN", shared_orig_to_fdp_small_delta_min);
   shared_orig_to_fdp_small_delta_max = read_double_env("ADAPT_SHARED_ORIG_TO_FDP_SMALL_DELTA_MAX", shared_orig_to_fdp_small_delta_max);
@@ -455,6 +492,47 @@ void adaptive_selector::configure_from_env()
   if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_ORIG_TO_FDP_SMALL_DELTA_MAX"); raw != nullptr) {
     shared_pair_orig_to_fdp_small_delta_max = std::stod(raw);
   }
+  if (read_env(cpu_prefix + "SHARED_PAIR_TWO_LOW_PAGE_SPLIT") != nullptr) {
+    shared_pair_two_low_page_split = read_bool_env((cpu_prefix + "SHARED_PAIR_TWO_LOW_PAGE_SPLIT").c_str(), shared_pair_two_low_page_split);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_MAX"); raw != nullptr) {
+    shared_pair_low_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_DENSE_DELTA_GAP"); raw != nullptr) {
+    shared_pair_dense_delta_gap = std::stod(raw);
+  }
+  if (read_env(cpu_prefix + "SHARED_PAIR_BOP_PROBATION_ENABLE") != nullptr) {
+    shared_pair_bop_probation_enable =
+        read_bool_env((cpu_prefix + "SHARED_PAIR_BOP_PROBATION_ENABLE").c_str(), shared_pair_bop_probation_enable);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PAGE_MIN"); raw != nullptr) {
+    shared_pair_bop_page_min = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PAGE_MAX"); raw != nullptr) {
+    shared_pair_bop_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PEER_PAGE_MAX"); raw != nullptr) {
+    shared_pair_bop_peer_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PEER_SMALL_DELTA_MIN"); raw != nullptr) {
+    shared_pair_bop_peer_small_delta_min = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PRESSURE_MAX"); raw != nullptr) {
+    shared_pair_bop_pressure_max = std::stod(raw);
+  }
+  if (read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_FDP_PROBE_DELAY_ENABLE") != nullptr) {
+    shared_pair_low_page_fdp_probe_delay_enable =
+        read_bool_env((cpu_prefix + "SHARED_PAIR_LOW_PAGE_FDP_PROBE_DELAY_ENABLE").c_str(), shared_pair_low_page_fdp_probe_delay_enable);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_PROBE_PAGE_MAX"); raw != nullptr) {
+    shared_pair_low_page_probe_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_PROBE_SMALL_DELTA_MAX"); raw != nullptr) {
+    shared_pair_low_page_probe_small_delta_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_PROBE_STREAK"); raw != nullptr) {
+    shared_pair_low_page_probe_streak = std::max<uint32_t>(1, static_cast<uint32_t>(std::stoul(raw)));
+  }
   if (const char* raw = read_env(cpu_prefix + "SHARED_ORIG_TO_FDP_PAGE_MAX"); raw != nullptr) {
     shared_orig_to_fdp_page_max = std::stod(raw);
   }
@@ -578,10 +656,12 @@ void adaptive_selector::evaluate_and_update()
   if (cpu_index >= shared.recent_rfo_share.size()) {
     shared.recent_rfo_share.resize(cpu_index + 1, 0.0);
     shared.recent_page_growth.resize(cpu_index + 1, 0.0);
+    shared.recent_line_growth.resize(cpu_index + 1, 0.0);
     shared.recent_small_delta_ratio.resize(cpu_index + 1, 0.0);
   }
   shared.recent_rfo_share[cpu_index] = last_features.rfo_share;
   shared.recent_page_growth[cpu_index] = last_features.page_growth;
+  shared.recent_line_growth[cpu_index] = last_features.line_growth;
   shared.recent_small_delta_ratio[cpu_index] = last_features.small_delta_ratio;
   if (shared_coord_enable) {
     refresh_shared_pressure();
@@ -610,7 +690,25 @@ void adaptive_selector::evaluate_and_update()
     return;
   }
 
-  if (candidate_streak < decision_streak || candidate == active_mode) {
+  uint32_t required_streak = decision_streak;
+  const bool low_page_orig_probe =
+      shared_pair_low_page_fdp_probe_delay_enable && active_mode == expert_mode::none && last_shared.pair_scope_active &&
+      last_shared.peer_ready_cores > 0 && base_candidate == expert_mode::fdp && candidate == expert_mode::orig &&
+      last_features.page_growth < shared_pair_low_page_probe_page_max &&
+      last_features.small_delta_ratio < shared_pair_low_page_probe_small_delta_max && last_shared.peer_page_growth > 0.0 &&
+      last_shared.peer_page_growth < shared_pair_low_page_max &&
+      last_shared.peer_small_delta_ratio >= last_features.small_delta_ratio + shared_pair_dense_delta_gap;
+  const bool low_page_dense_peer_probe =
+      shared_pair_low_page_fdp_probe_delay_enable && active_mode == expert_mode::none && last_shared.pair_scope_active &&
+      last_shared.peer_ready_cores > 0 && candidate == expert_mode::orig && last_features.page_growth < fdp_page_growth_max &&
+      last_features.small_delta_ratio >= orig_small_delta_min && last_shared.peer_page_growth >= fdp_page_growth_max &&
+      last_shared.peer_page_growth < shared_pair_low_page_probe_page_max &&
+      last_shared.peer_small_delta_ratio < shared_pair_low_page_probe_small_delta_max;
+  if (low_page_orig_probe || low_page_dense_peer_probe) {
+    required_streak = std::max(required_streak, shared_pair_low_page_probe_streak);
+  }
+
+  if (candidate_streak < required_streak || candidate == active_mode) {
     return;
   }
 
@@ -627,9 +725,13 @@ void adaptive_selector::evaluate_and_update()
             << " from=" << mode_name(previous)
             << " to=" << mode_name(active_mode)
             << " streak=" << candidate_streak
+            << " required_streak=" << required_streak
             << " pressure_active=" << last_shared.pressure_active
             << " local_pressure=" << last_shared.local_pressure
             << " global_pressure=" << (shared_pressure_use_avg ? last_shared.global_avg_pressure : last_shared.global_max_pressure)
+            << " peer_pressure=" << last_shared.peer_pressure
+            << " peer_page_growth=" << last_shared.peer_page_growth
+            << " peer_small_delta_ratio=" << last_shared.peer_small_delta_ratio
             << " rfo_share=" << last_features.rfo_share
             << " line_growth=" << last_features.line_growth
             << " page_growth=" << last_features.page_growth
@@ -661,6 +763,10 @@ void adaptive_selector::refresh_shared_pressure()
   if (cpu_index >= shared.local_pressures.size()) {
     shared.local_pressures.resize(cpu_index + 1, 0.0);
     shared.active_modes.resize(cpu_index + 1, 0);
+    shared.recent_rfo_share.resize(cpu_index + 1, 0.0);
+    shared.recent_page_growth.resize(cpu_index + 1, 0.0);
+    shared.recent_line_growth.resize(cpu_index + 1, 0.0);
+    shared.recent_small_delta_ratio.resize(cpu_index + 1, 0.0);
   }
 
   last_shared.local_pressure = compute_local_pressure();
@@ -669,6 +775,10 @@ void adaptive_selector::refresh_shared_pressure()
 
   last_shared.global_max_pressure = max_or_zero(shared.local_pressures);
   last_shared.global_avg_pressure = avg_or_zero(shared.local_pressures);
+  last_shared.peer_pressure = 0.0;
+  last_shared.peer_page_growth = 0.0;
+  last_shared.peer_line_growth = 0.0;
+  last_shared.peer_small_delta_ratio = 0.0;
   last_shared.bop_cores = static_cast<uint32_t>(std::count(shared.active_modes.begin(), shared.active_modes.end(), static_cast<uint8_t>(expert_mode::bop)));
   last_shared.low_pressure_streak = shared.low_streak;
 
@@ -690,6 +800,10 @@ void adaptive_selector::refresh_shared_pressure()
       continue;
     }
     ++last_shared.peer_ready_cores;
+    last_shared.peer_pressure = std::max(last_shared.peer_pressure, shared.local_pressures[idx]);
+    last_shared.peer_page_growth = std::max(last_shared.peer_page_growth, peer_page_growth);
+    last_shared.peer_line_growth = std::max(last_shared.peer_line_growth, shared.recent_line_growth[idx]);
+    last_shared.peer_small_delta_ratio = std::max(last_shared.peer_small_delta_ratio, shared.recent_small_delta_ratio[idx]);
     const bool page_in_lbm_band = peer_page_growth <= shared_peer_lbm_page_max;
     const bool rfo_lbm_like = page_in_lbm_band && shared.recent_rfo_share[idx] >= shared_peer_lbm_rfo_min;
     const bool delta_lbm_like = page_in_lbm_band && shared.recent_small_delta_ratio[idx] >= shared_peer_lbm_small_delta_min;
@@ -744,6 +858,35 @@ void adaptive_selector::refresh_shared_pressure()
 adaptive_selector::expert_mode adaptive_selector::coordinate_candidate(expert_mode candidate, const window_features& features)
 {
   if (!shared_coord_enable) {
+    return candidate;
+  }
+
+  const bool pair_ready = last_shared.pair_scope_active && last_shared.peer_ready_cores > 0;
+  const bool both_low_page =
+      pair_ready && shared_pair_two_low_page_split && features.page_growth < shared_pair_low_page_max &&
+      last_shared.peer_page_growth > 0.0 && last_shared.peer_page_growth < shared_pair_low_page_max;
+  if (both_low_page) {
+    if (features.small_delta_ratio >= last_shared.peer_small_delta_ratio + shared_pair_dense_delta_gap) {
+      if (candidate != expert_mode::fdp) {
+        ++pressure_remap_count;
+      }
+      return expert_mode::fdp;
+    }
+    if (last_shared.peer_small_delta_ratio >= features.small_delta_ratio + shared_pair_dense_delta_gap) {
+      if (candidate != expert_mode::orig) {
+        ++pressure_remap_count;
+      }
+      return expert_mode::orig;
+    }
+  }
+
+  const bool allow_pair_bop_probation =
+      pair_ready && shared_pair_bop_probation_enable && candidate == expert_mode::bop && !last_shared.pressure_active &&
+      last_shared.local_pressure <= shared_pair_bop_pressure_max && features.page_growth >= shared_pair_bop_page_min &&
+      features.page_growth <= shared_pair_bop_page_max && last_shared.peer_page_growth <= shared_pair_bop_peer_page_max &&
+      last_shared.peer_small_delta_ratio >= shared_pair_bop_peer_small_delta_min;
+
+  if (allow_pair_bop_probation) {
     return candidate;
   }
 
