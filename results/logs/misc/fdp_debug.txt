@@ -1,4 +1,0 @@
-[FDP_DBG] epoch_update issued=3714 useful=275 level_before=3
-[FDP_DBG] epoch_update issued=2520 useful=369 level_before=2
-[FDP_DBG] epoch_update issued=959 useful=367 level_before=1
-[FDP_DBG] epoch_update issued=1059 useful=369 level_before=1

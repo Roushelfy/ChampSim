@@ -1,2 +1,0 @@
-file,workload,policy,ipc,instructions,cycles,l1d_miss,l2c_miss,llc_miss,l1d_mpki,l2c_mpki,llc_mpki,pf_requested,pf_issued,pf_useful,pf_useless,pf_accuracy,pf_coverage_proxy,offchip_bw_proxy_avg_dbus_congested_cycle,queue_occupancy,demand_stall_cycles
-no_pref_bzip2_5M.txt,bzip2,no_pref,1.899,5000000,2632356,13436,3172,3172,2.6872,0.6344,0.6344,0,0,0,0,0.0,0.0,0.0,1.891e-05,928968

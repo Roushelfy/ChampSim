@@ -34,14 +34,5 @@ compile_commands.json
 # ChampSim traces (large binary files)
 traces/
 
-# Phase 1.5 raw logs
-results/logs/phase15/screening/
-results/logs/phase15/multicore/
-results/logs/phase15/launches/
-
-# OpenEvolve raw logs and overnight artifacts
-results/openevolve/logs/
-results/openevolve/smoke_launch/logs/
-results/openevolve_official/logs/
-results/openevolve_official/overnight/
-results/openevolve_official/profile_runs/**/logs/
+# Local run output
+results/
