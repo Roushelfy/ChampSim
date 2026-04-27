@@ -80,6 +80,7 @@ private:
   uint64_t pressure_sample_count = 0;
   uint32_t candidate_streak = 0;
   bool locked = false;
+  uint32_t fdp_lock_delay_remaining = 0;
   uint32_t cpu_index = 0;
 
   std::size_t window_size = 64;
@@ -129,6 +130,16 @@ private:
   double shared_pair_bop_peer_page_max = 0.17;
   double shared_pair_bop_peer_small_delta_min = 0.70;
   double shared_pair_bop_pressure_max = 0.42;
+  bool shared_pair_high_page_symmetric_enable = true;
+  double shared_pair_high_page_bop_min = 0.45;
+  double shared_pair_high_page_bop_max = 0.85;
+  double shared_pair_high_page_fdp_min = 0.90;
+  double shared_pair_high_page_sparse_delta_max = 0.25;
+  bool shared_pair_delay_low_page_fdp_lock = true;
+  uint32_t shared_pair_fdp_lock_delay_evals = 3;
+  double shared_pair_delay_fdp_page_max = 0.18;
+  double shared_pair_delay_fdp_peer_page_max = 0.20;
+  double shared_pair_delay_fdp_small_delta_min = 0.50;
   bool shared_pair_low_page_fdp_probe_delay_enable = true;
   double shared_pair_low_page_probe_page_max = 0.20;
   double shared_pair_low_page_probe_small_delta_max = 0.70;
@@ -149,6 +160,7 @@ private:
   double compute_local_pressure() const;
   void refresh_shared_pressure();
   expert_mode coordinate_candidate(expert_mode candidate, const window_features& features);
+  bool should_delay_low_page_fdp_lock(const window_features& features) const;
 
   uint32_t forward_cache_operate(expert_mode mode, champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,
                                  uint32_t metadata_in);

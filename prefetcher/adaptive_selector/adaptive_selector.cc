@@ -187,6 +187,16 @@ void adaptive_selector::prefetcher_initialize()
             << " shared_pair_bop_peer_page_max=" << shared_pair_bop_peer_page_max
             << " shared_pair_bop_peer_small_delta_min=" << shared_pair_bop_peer_small_delta_min
             << " shared_pair_bop_pressure_max=" << shared_pair_bop_pressure_max
+            << " shared_pair_high_page_symmetric_enable=" << shared_pair_high_page_symmetric_enable
+            << " shared_pair_high_page_bop_min=" << shared_pair_high_page_bop_min
+            << " shared_pair_high_page_bop_max=" << shared_pair_high_page_bop_max
+            << " shared_pair_high_page_fdp_min=" << shared_pair_high_page_fdp_min
+            << " shared_pair_high_page_sparse_delta_max=" << shared_pair_high_page_sparse_delta_max
+            << " shared_pair_delay_low_page_fdp_lock=" << shared_pair_delay_low_page_fdp_lock
+            << " shared_pair_fdp_lock_delay_evals=" << shared_pair_fdp_lock_delay_evals
+            << " shared_pair_delay_fdp_page_max=" << shared_pair_delay_fdp_page_max
+            << " shared_pair_delay_fdp_peer_page_max=" << shared_pair_delay_fdp_peer_page_max
+            << " shared_pair_delay_fdp_small_delta_min=" << shared_pair_delay_fdp_small_delta_min
             << " shared_pair_low_page_fdp_probe_delay_enable=" << shared_pair_low_page_fdp_probe_delay_enable
             << " shared_pair_low_page_probe_page_max=" << shared_pair_low_page_probe_page_max
             << " shared_pair_low_page_probe_small_delta_max=" << shared_pair_low_page_probe_small_delta_max
@@ -249,6 +259,7 @@ void adaptive_selector::prefetcher_final_stats()
             << " pressure_remaps=" << pressure_remap_count
             << " pressure_samples=" << pressure_sample_count
             << " locked=" << locked
+            << " fdp_lock_delay_remaining=" << fdp_lock_delay_remaining
             << " demand_observations=" << demand_observations
             << " last_candidate=" << mode_name(last_candidate)
             << " last_local_pressure=" << last_shared.local_pressure
@@ -354,6 +365,19 @@ void adaptive_selector::configure_from_env()
   shared_pair_bop_peer_small_delta_min =
       read_double_env("ADAPT_SHARED_PAIR_BOP_PEER_SMALL_DELTA_MIN", shared_pair_bop_peer_small_delta_min);
   shared_pair_bop_pressure_max = read_double_env("ADAPT_SHARED_PAIR_BOP_PRESSURE_MAX", shared_pair_bop_pressure_max);
+  shared_pair_high_page_symmetric_enable =
+      read_bool_env("ADAPT_SHARED_PAIR_HIGH_PAGE_SYMMETRIC_ENABLE", shared_pair_high_page_symmetric_enable);
+  shared_pair_high_page_bop_min = read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_BOP_MIN", shared_pair_high_page_bop_min);
+  shared_pair_high_page_bop_max = read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_BOP_MAX", shared_pair_high_page_bop_max);
+  shared_pair_high_page_fdp_min = read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_FDP_MIN", shared_pair_high_page_fdp_min);
+  shared_pair_high_page_sparse_delta_max =
+      read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_SPARSE_DELTA_MAX", shared_pair_high_page_sparse_delta_max);
+  shared_pair_delay_low_page_fdp_lock = read_bool_env("ADAPT_SHARED_PAIR_DELAY_LOW_PAGE_FDP_LOCK", shared_pair_delay_low_page_fdp_lock);
+  shared_pair_fdp_lock_delay_evals = read_u32_env("ADAPT_SHARED_PAIR_FDP_LOCK_DELAY_EVALS", shared_pair_fdp_lock_delay_evals);
+  shared_pair_delay_fdp_page_max = read_double_env("ADAPT_SHARED_PAIR_DELAY_FDP_PAGE_MAX", shared_pair_delay_fdp_page_max);
+  shared_pair_delay_fdp_peer_page_max =
+      read_double_env("ADAPT_SHARED_PAIR_DELAY_FDP_PEER_PAGE_MAX", shared_pair_delay_fdp_peer_page_max);
+  shared_pair_delay_fdp_small_delta_min = read_double_env("ADAPT_SHARED_PAIR_DELAY_FDP_SMALL_DELTA_MIN", shared_pair_delay_fdp_small_delta_min);
   shared_pair_low_page_fdp_probe_delay_enable =
       read_bool_env("ADAPT_SHARED_PAIR_LOW_PAGE_FDP_PROBE_DELAY_ENABLE", shared_pair_low_page_fdp_probe_delay_enable);
   shared_pair_low_page_probe_page_max =
@@ -519,6 +543,38 @@ void adaptive_selector::configure_from_env()
   }
   if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_BOP_PRESSURE_MAX"); raw != nullptr) {
     shared_pair_bop_pressure_max = std::stod(raw);
+  }
+  if (read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_SYMMETRIC_ENABLE") != nullptr) {
+    shared_pair_high_page_symmetric_enable =
+        read_bool_env((cpu_prefix + "SHARED_PAIR_HIGH_PAGE_SYMMETRIC_ENABLE").c_str(), shared_pair_high_page_symmetric_enable);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_BOP_MIN"); raw != nullptr) {
+    shared_pair_high_page_bop_min = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_BOP_MAX"); raw != nullptr) {
+    shared_pair_high_page_bop_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_FDP_MIN"); raw != nullptr) {
+    shared_pair_high_page_fdp_min = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_SPARSE_DELTA_MAX"); raw != nullptr) {
+    shared_pair_high_page_sparse_delta_max = std::stod(raw);
+  }
+  if (read_env(cpu_prefix + "SHARED_PAIR_DELAY_LOW_PAGE_FDP_LOCK") != nullptr) {
+    shared_pair_delay_low_page_fdp_lock =
+        read_bool_env((cpu_prefix + "SHARED_PAIR_DELAY_LOW_PAGE_FDP_LOCK").c_str(), shared_pair_delay_low_page_fdp_lock);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_FDP_LOCK_DELAY_EVALS"); raw != nullptr) {
+    shared_pair_fdp_lock_delay_evals = static_cast<uint32_t>(std::stoul(raw));
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_DELAY_FDP_PAGE_MAX"); raw != nullptr) {
+    shared_pair_delay_fdp_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_DELAY_FDP_PEER_PAGE_MAX"); raw != nullptr) {
+    shared_pair_delay_fdp_peer_page_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_DELAY_FDP_SMALL_DELTA_MIN"); raw != nullptr) {
+    shared_pair_delay_fdp_small_delta_min = std::stod(raw);
   }
   if (read_env(cpu_prefix + "SHARED_PAIR_LOW_PAGE_FDP_PROBE_DELAY_ENABLE") != nullptr) {
     shared_pair_low_page_fdp_probe_delay_enable =
@@ -707,8 +763,13 @@ void adaptive_selector::evaluate_and_update()
   if (low_page_orig_probe || low_page_dense_peer_probe) {
     required_streak = std::max(required_streak, shared_pair_low_page_probe_streak);
   }
-
   if (candidate_streak < required_streak || candidate == active_mode) {
+    if (active_mode == expert_mode::fdp && fdp_lock_delay_remaining > 0) {
+      --fdp_lock_delay_remaining;
+      if (fdp_lock_delay_remaining == 0 && lock_after_switch) {
+        locked = true;
+      }
+    }
     return;
   }
 
@@ -737,8 +798,15 @@ void adaptive_selector::evaluate_and_update()
             << " page_growth=" << last_features.page_growth
             << " small_delta_ratio=" << last_features.small_delta_ratio << std::endl;
 
+  fdp_lock_delay_remaining = 0;
   if (lock_after_switch && active_mode != expert_mode::none) {
-    locked = true;
+    const bool delay_fdp_lock = previous == expert_mode::none && active_mode == expert_mode::fdp && should_delay_low_page_fdp_lock(last_features);
+    if (delay_fdp_lock) {
+      fdp_lock_delay_remaining = shared_pair_fdp_lock_delay_evals;
+      locked = (fdp_lock_delay_remaining == 0);
+    } else {
+      locked = true;
+    }
   }
 }
 
@@ -842,6 +910,7 @@ void adaptive_selector::refresh_shared_pressure()
     ++switch_count;
     ++pressure_remap_count;
     last_candidate = active_mode;
+    fdp_lock_delay_remaining = 0;
     candidate_streak = 0;
     ensure_initialized(active_mode);
     std::cout << "[ADAPTIVE_SELECTOR] force_demote"
@@ -862,6 +931,25 @@ adaptive_selector::expert_mode adaptive_selector::coordinate_candidate(expert_mo
   }
 
   const bool pair_ready = last_shared.pair_scope_active && last_shared.peer_ready_cores > 0;
+  const bool sparse_peer = last_shared.peer_small_delta_ratio <= shared_pair_high_page_sparse_delta_max;
+  if (pair_ready && shared_pair_high_page_symmetric_enable && candidate == expert_mode::bop &&
+      features.small_delta_ratio <= shared_pair_high_page_sparse_delta_max) {
+    const bool both_ultra_high_page =
+        features.page_growth >= shared_pair_high_page_fdp_min && last_shared.peer_page_growth >= shared_pair_high_page_fdp_min && sparse_peer;
+    if (both_ultra_high_page) {
+      ++pressure_remap_count;
+      return expert_mode::fdp;
+    }
+
+    const bool both_mid_high_page =
+        features.page_growth >= shared_pair_high_page_bop_min && features.page_growth <= shared_pair_high_page_bop_max &&
+        last_shared.peer_page_growth >= shared_pair_high_page_bop_min && last_shared.peer_page_growth <= shared_pair_high_page_bop_max &&
+        sparse_peer;
+    if (both_mid_high_page) {
+      return candidate;
+    }
+  }
+
   const bool both_low_page =
       pair_ready && shared_pair_two_low_page_split && features.page_growth < shared_pair_low_page_max &&
       last_shared.peer_page_growth > 0.0 && last_shared.peer_page_growth < shared_pair_low_page_max;
@@ -932,6 +1020,22 @@ adaptive_selector::expert_mode adaptive_selector::coordinate_candidate(expert_mo
   }
 
   return candidate;
+}
+
+bool adaptive_selector::should_delay_low_page_fdp_lock(const window_features& features) const
+{
+  if (!shared_pair_delay_low_page_fdp_lock || shared_pair_fdp_lock_delay_evals == 0 || !last_shared.pair_scope_active ||
+      last_shared.peer_ready_cores == 0) {
+    return false;
+  }
+  if (features.page_growth > shared_pair_delay_fdp_page_max || last_shared.peer_page_growth <= 0.0 ||
+      last_shared.peer_page_growth > shared_pair_delay_fdp_peer_page_max) {
+    return false;
+  }
+
+  const bool local_near_orig = features.small_delta_ratio >= shared_pair_delay_fdp_small_delta_min;
+  const bool peer_near_orig = last_shared.peer_small_delta_ratio >= shared_pair_delay_fdp_small_delta_min;
+  return local_near_orig && peer_near_orig;
 }
 
 uint32_t adaptive_selector::forward_cache_operate(expert_mode mode, champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch,
