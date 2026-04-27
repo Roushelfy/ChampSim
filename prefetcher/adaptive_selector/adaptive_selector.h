@@ -133,8 +133,12 @@ private:
   bool shared_pair_high_page_symmetric_enable = true;
   double shared_pair_high_page_bop_min = 0.45;
   double shared_pair_high_page_bop_max = 0.85;
-  double shared_pair_high_page_fdp_min = 0.90;
+  double shared_pair_high_page_fdp_min = 0.85;
   double shared_pair_high_page_sparse_delta_max = 0.25;
+  bool shared_pair_allow_bop_with_nondense_peer = true;
+  double shared_pair_allow_bop_page_min = 0.43;
+  double shared_pair_allow_bop_peer_small_delta_max = 0.70;
+  double shared_pair_allow_bop_pressure_max = 0.45;
   bool shared_pair_delay_low_page_fdp_lock = true;
   uint32_t shared_pair_fdp_lock_delay_evals = 3;
   double shared_pair_delay_fdp_page_max = 0.18;

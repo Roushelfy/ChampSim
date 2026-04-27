@@ -192,6 +192,10 @@ void adaptive_selector::prefetcher_initialize()
             << " shared_pair_high_page_bop_max=" << shared_pair_high_page_bop_max
             << " shared_pair_high_page_fdp_min=" << shared_pair_high_page_fdp_min
             << " shared_pair_high_page_sparse_delta_max=" << shared_pair_high_page_sparse_delta_max
+            << " shared_pair_allow_bop_with_nondense_peer=" << shared_pair_allow_bop_with_nondense_peer
+            << " shared_pair_allow_bop_page_min=" << shared_pair_allow_bop_page_min
+            << " shared_pair_allow_bop_peer_small_delta_max=" << shared_pair_allow_bop_peer_small_delta_max
+            << " shared_pair_allow_bop_pressure_max=" << shared_pair_allow_bop_pressure_max
             << " shared_pair_delay_low_page_fdp_lock=" << shared_pair_delay_low_page_fdp_lock
             << " shared_pair_fdp_lock_delay_evals=" << shared_pair_fdp_lock_delay_evals
             << " shared_pair_delay_fdp_page_max=" << shared_pair_delay_fdp_page_max
@@ -372,6 +376,12 @@ void adaptive_selector::configure_from_env()
   shared_pair_high_page_fdp_min = read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_FDP_MIN", shared_pair_high_page_fdp_min);
   shared_pair_high_page_sparse_delta_max =
       read_double_env("ADAPT_SHARED_PAIR_HIGH_PAGE_SPARSE_DELTA_MAX", shared_pair_high_page_sparse_delta_max);
+  shared_pair_allow_bop_with_nondense_peer =
+      read_bool_env("ADAPT_SHARED_PAIR_ALLOW_BOP_WITH_NONDENSE_PEER", shared_pair_allow_bop_with_nondense_peer);
+  shared_pair_allow_bop_page_min = read_double_env("ADAPT_SHARED_PAIR_ALLOW_BOP_PAGE_MIN", shared_pair_allow_bop_page_min);
+  shared_pair_allow_bop_peer_small_delta_max =
+      read_double_env("ADAPT_SHARED_PAIR_ALLOW_BOP_PEER_SMALL_DELTA_MAX", shared_pair_allow_bop_peer_small_delta_max);
+  shared_pair_allow_bop_pressure_max = read_double_env("ADAPT_SHARED_PAIR_ALLOW_BOP_PRESSURE_MAX", shared_pair_allow_bop_pressure_max);
   shared_pair_delay_low_page_fdp_lock = read_bool_env("ADAPT_SHARED_PAIR_DELAY_LOW_PAGE_FDP_LOCK", shared_pair_delay_low_page_fdp_lock);
   shared_pair_fdp_lock_delay_evals = read_u32_env("ADAPT_SHARED_PAIR_FDP_LOCK_DELAY_EVALS", shared_pair_fdp_lock_delay_evals);
   shared_pair_delay_fdp_page_max = read_double_env("ADAPT_SHARED_PAIR_DELAY_FDP_PAGE_MAX", shared_pair_delay_fdp_page_max);
@@ -559,6 +569,17 @@ void adaptive_selector::configure_from_env()
   }
   if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_HIGH_PAGE_SPARSE_DELTA_MAX"); raw != nullptr) {
     shared_pair_high_page_sparse_delta_max = std::stod(raw);
+  }
+  shared_pair_allow_bop_with_nondense_peer =
+      read_bool_env((cpu_prefix + "SHARED_PAIR_ALLOW_BOP_WITH_NONDENSE_PEER").c_str(), shared_pair_allow_bop_with_nondense_peer);
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_ALLOW_BOP_PAGE_MIN"); raw != nullptr) {
+    shared_pair_allow_bop_page_min = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_ALLOW_BOP_PEER_SMALL_DELTA_MAX"); raw != nullptr) {
+    shared_pair_allow_bop_peer_small_delta_max = std::stod(raw);
+  }
+  if (const char* raw = read_env(cpu_prefix + "SHARED_PAIR_ALLOW_BOP_PRESSURE_MAX"); raw != nullptr) {
+    shared_pair_allow_bop_pressure_max = std::stod(raw);
   }
   if (read_env(cpu_prefix + "SHARED_PAIR_DELAY_LOW_PAGE_FDP_LOCK") != nullptr) {
     shared_pair_delay_low_page_fdp_lock =
@@ -948,6 +969,18 @@ adaptive_selector::expert_mode adaptive_selector::coordinate_candidate(expert_mo
     if (both_mid_high_page) {
       return candidate;
     }
+  }
+
+  const bool peer_is_dense_low_page =
+      pair_ready && last_shared.peer_page_growth <= shared_pair_peer_lbm_page_max &&
+      last_shared.peer_small_delta_ratio >= shared_pair_peer_lbm_small_delta_min;
+  const bool allow_bop_with_nondense_peer =
+      pair_ready && shared_pair_allow_bop_with_nondense_peer && candidate == expert_mode::bop && !last_shared.pressure_active &&
+      last_shared.local_pressure <= shared_pair_allow_bop_pressure_max && features.page_growth >= shared_pair_allow_bop_page_min &&
+      features.small_delta_ratio <= shared_pair_allow_bop_peer_small_delta_max &&
+      last_shared.peer_small_delta_ratio <= shared_pair_allow_bop_peer_small_delta_max && !peer_is_dense_low_page;
+  if (allow_bop_with_nondense_peer) {
+    return candidate;
   }
 
   const bool both_low_page =
