@@ -1,5 +1,28 @@
 # BWC Adaptive Selector Report
 
+## Source Versions
+
+| version | source |
+|---|---|
+| phase 1 final prefetcher | `prefetcher/adaptive_selector/adaptive_selector.cc` |
+| phase 2 OpenEvolve best prefetcher | `prefetcher/adaptive_selector_phase2_best/adaptive_selector.cc` |
+
+## Phase 2 OpenEvolve Best (2M + 10M)
+
+| case | SPP_orig baseline | phase 1 source | phase 1 gain | phase 2 best | phase 2 gain | delta |
+|---|---:|---:|---:|---:|---:|---:|
+| `lbm` IPC | `0.866441` | `0.8696655919051541` | `+0.3722%` | `0.8696655919051541` | `+0.3722%` | `+0.0000 pp` |
+| `bzip2 + lbm` WS | `1.792235` | `1.7917226370235841` | `-0.0286%` | `1.7937053010534283` | `+0.0820%` | `+0.1106 pp` |
+| `mcf + lbm` WS | `1.256300` | `1.243539575921284` | `-1.0157%` | `1.2495028378164286` | `-0.5410%` | `+0.4747 pp` |
+
+| metric | phase 1 source | phase 2 best | delta |
+|---|---:|---:|---:|
+| `combined_score` | `-6.2665` | `-3.0105` | `+3.2559` |
+| `mean_gain_pct` | `-0.2240%` | `-0.0289%` | `+0.1951 pp` |
+| `min_gain_pct` | `-1.0157%` | `-0.5410%` | `+0.4747 pp` |
+
+Phase 2 changed only the shared pair-coordination decision logic in `coordinate_candidate()`. The best point remaps several pair-mode fallback cases from `orig` to `FDP`: dense-peer split handling, pair-scope BOP demotion, and lbm-like peer protection. It also adds two runtime-signal guards that promote FDP when a sparse/high-page-growth core is paired with an lbm-like peer, or when an lbm-like core is paired with a high-page-growth peer. This leaves single-core `lbm` unchanged while reducing shared-resource interference in `bzip2 + lbm` and `mcf + lbm`.
+
 ## Single-Core IPC
 
 | workload | baseline IPC | current IPC | gain |
