@@ -1,0 +1,579 @@
+\documentclass[10pt,letterpaper]{article}
+
+\usepackage[margin=0.55in]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric}
+
+\definecolor{bwcBlue}{HTML}{1F6F8B}
+\definecolor{bwcCoral}{HTML}{B34D3A}
+\definecolor{bwcGold}{HTML}{C58B2B}
+\definecolor{bwcGray}{HTML}{4B5563}
+\definecolor{bwcLight}{HTML}{EEF6F8}
+\definecolor{bwcWarm}{HTML}{FFF3E8}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=bwcBlue,
+  citecolor=bwcBlue,
+  urlcolor=bwcBlue
+}
+
+\titlespacing*{\section}{0pt}{4pt}{1pt}
+\titlespacing*{\subsection}{0pt}{3pt}{1pt}
+\setlist[itemize]{leftmargin=*,nosep}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1pt}
+\captionsetup{font=small,labelfont=bf,skip=2pt}
+\setlength{\textfloatsep}{6pt plus 1pt minus 2pt}
+\setlength{\floatsep}{5pt plus 1pt minus 2pt}
+\setlength{\intextsep}{5pt plus 1pt minus 2pt}
+
+\newcommand{\pct}[1]{#1\%}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\vspace{-2.5em}\textbf{BWC Adaptive Selector: Pair-Aware Runtime Prefetcher Selection in ChampSim}}
+\author{Zhaofeng Luo \and Kijun Shin}
+\date{15-740 Computer Architecture}
+
+\begin{document}
+\maketitle
+\vspace{-1.4em}
+
+\section*{0. Abstract}
+
+Hardware prefetchers hide memory latency, but aggressive prefetch traffic can
+consume shared cache capacity, memory queues, and off-chip bandwidth. This is
+especially important in multicore systems, where a locally plausible prefetch
+stream can delay demand requests from a peer. We address this prefetch-control
+problem in ChampSim by building the BWC Adaptive Selector, a pair-aware L2
+runtime selector over original SPP, an FDP-style SPP variant, and BOP. BWC
+observes local stream features such as page growth, line growth, small-delta
+ratio, and RFO share, then uses peer/shared signals to decide whether the local
+expert choice is safe under contention. OpenEvolve was used in the final phase
+to refine only the pair-coordination logic, leaving expert prefetcher internals
+fixed. The retained selector improves all four listed single-core workloads
+over SPP by \pct{0.8569} to \pct{2.6685} IPC and all ten reported two-core
+pairs by \pct{0.0515} to \pct{4.2142} weighted speedup. In the focused Phase 2
+comparison, OpenEvolve fixes the \code{bzip2 + lbm} regression and reduces the
+\code{mcf + lbm} worst-case loss. The main insight is that prefetch control
+should be peer-aware: locally reasonable prefetch decisions can become globally
+harmful under shared-resource contention.
+
+\section*{1. Introduction}
+
+Modern data prefetchers exploit regular memory behavior to fetch lines before
+the core demands them. This can substantially improve performance for streaming
+and structured workloads. However, prefetches are not free: each request
+occupies queues, MSHRs, cache space, and DRAM bandwidth. In multicore systems,
+these costs cross core boundaries. A prefetcher that helps one core locally can
+hurt another core through shared LLC and memory-system pressure.
+
+The project began from a bandwidth-aware control question: can a runtime policy
+control an SPP-like prefetcher better than static or accuracy-only throttling?
+Accuracy is useful but incomplete. A low-accuracy stream can still provide
+coverage or memory-level effects, while a confident predictor can still create
+harmful traffic. We therefore treat prefetching as a control problem, not only
+an address-prediction problem.
+
+The final artifact is the BWC Adaptive Selector. Rather than inventing a new
+predictor, it chooses among experts with different behaviors: \code{spp\_orig},
+\code{spp\_dev} with FDP-style controls, and \code{bop}. The selector asks two
+questions on every stable window: what does the local stream look like, and
+does the peer make the locally preferred choice risky? Our research question is
+whether these local and peer/shared signals can choose safer prefetch behavior
+than a single static policy. For the retained workload suite, the results show
+that these signals improve over a static \code{SPP\_orig} baseline, while the
+Phase 2 mini-evaluation also reveals a limitation: the coordinator reduces but
+does not fully eliminate the \code{mcf + lbm} regression.
+
+\section*{2. Related Work}
+
+Feedback Directed Prefetching (FDP) by Srinath et al. dynamically adjusts
+prefetch aggressiveness using feedback such as accuracy, timeliness, and
+pollution \cite{fdp}. Our \code{spp\_dev} expert contains an FDP-style
+controller, but the final design builds above it: it selects among experts and
+uses pair signals to avoid choices that are unsafe under shared contention.
+
+The Signature Path Prefetcher (SPP), based on path-confidence lookahead
+prefetching, is our main SPP baseline \cite{spp}. It uses signatures and
+confidence to look ahead in access streams. Best-Offset Prefetching (BOP)
+searches for spatial offsets that work for the current stream \cite{bop}. In
+our design, these mechanisms are not only baselines but also expert behaviors:
+SPP represents the strong default lookahead prefetcher, the FDP-style variant
+represents a feedback-controlled SPP mode, and BOP represents an offset-oriented
+alternative for streams where it behaves differently. BWC differs by adding a
+selector and pair coordinator above the experts rather than replacing their
+address-generation logic. ChampSim is the trace-based simulation framework used
+to evaluate these designs \cite{champsim}. OpenEvolve is an evolutionary coding
+framework with LLM-guided mutation and quality-diversity search
+\cite{openevolve}. We use it in a narrow, coordinator-only way so the evolved
+design remains interpretable.
+
+\section*{3. Method}
+
+\subsection*{Implementation Overview}
+
+The main implementation is in \code{prefetcher/adaptive\_selector/}. The
+Phase 2 retained best point is stored separately in
+\code{prefetcher/adaptive\_selector\_phase2\_best/}. Table~\ref{tab:impl}
+maps the main selector stages to source-level artifacts.
+
+\begin{table}[h]
+\centering
+\scriptsize
+\caption{Source artifacts and implementation map.}
+\label{tab:impl}
+\begin{tabularx}{\linewidth}{@{}p{0.20\linewidth}p{0.25\linewidth}X@{}}
+\toprule
+Stage & Main function / artifact & Role \\
+\midrule
+Feature extraction & \code{compute\_window\_features()} & Computes \code{page\_growth}, \code{line\_growth}, \code{small\_delta\_ratio}, and \code{rfo\_share}. \\
+Local selection & \code{classify\_window()} & Produces the local \code{orig}, \code{FDP}, or \code{BOP} candidate. \\
+Shared context & \code{refresh\_shared\_pressure()} & Records local pressure plus peer page/delta signatures and \code{peer\_lbm\_like}. \\
+Pair coordination & \code{coordinate\_candidate()} & Remaps or blocks risky pair choices before activation. \\
+Configurations & \code{adaptive\_selector} configs & Instantiate the selector in single-core and two-core ChampSim runs. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  node distance=9mm and 12mm,
+  box/.style={draw=bwcBlue, rounded corners=3pt, very thick, fill=bwcLight, align=center, minimum height=9mm, text width=34mm},
+  peer/.style={draw=bwcCoral, rounded corners=3pt, very thick, fill=bwcWarm, align=center, minimum height=9mm, text width=39mm},
+  coord/.style={draw=bwcGray, rounded corners=3pt, very thick, fill=white, align=center, minimum height=10mm, text width=40mm},
+  rule/.style={draw=bwcGold, rounded corners=3pt, thick, fill=yellow!8, align=center, text width=35mm, minimum height=8mm},
+  arrow/.style={-{Latex[length=2.2mm]}, thick}
+]
+\node[box] (features) {Local Stream Features\\[-1mm]\scriptsize page growth, line growth\\small delta, RFO share};
+\node[peer, right=of features] (peerctx) {Peer / Shared Context\\[-1mm]\scriptsize peer page/delta, pressure\\peer \code{lbm}-like};
+\node[box, below=of features] (classify) {\code{classify\_window()}\\[-1mm]\scriptsize local candidate\\\textbf{orig / FDP / BOP}};
+\node[peer, below=of peerctx] (refresh) {\code{refresh\_shared}\\\code{\_pressure()}\\[-1mm]\scriptsize shared snapshot};
+\node[coord, below right=11mm and -18mm of classify] (coord) {\code{coordinate\_candidate()}\\[-1mm]\scriptsize remap or block risky pair choices};
+\node[box, below=of coord] (active) {Active Expert\\[-1mm]\textbf{orig / FDP / BOP}};
+
+\draw[arrow,bwcBlue] (features) -- (classify);
+\draw[arrow,bwcCoral] (peerctx) -- (refresh);
+\draw[arrow,bwcBlue] (classify) -- (coord);
+\draw[arrow,bwcCoral] (refresh) -- (coord);
+\draw[arrow,bwcGray] (coord) -- (active);
+
+\node[rule, left=8mm of coord] (r1) {High-page sparse pair\\\textbf{BOP -> FDP}};
+\node[rule, below=4mm of r1] (r2) {Low-page dense-peer split\\\textbf{prefer FDP}};
+\node[rule, right=8mm of coord] (r3) {Pressure or \code{lbm}-like peer\\\textbf{block/demote BOP}};
+\draw[arrow,bwcGold] (r1.east) -- (coord.west);
+\draw[arrow,bwcGold] (r2.east) -- (coord.west);
+\draw[arrow,bwcGold] (r3.west) -- (coord.east);
+\end{tikzpicture}
+\caption{Simplified BWC Adaptive Selector pipeline, based on the poster flow. Local stream features select a candidate; peer/shared signals guard the final activation.}
+\label{fig:pipeline}
+\end{figure}
+
+Figure~\ref{fig:pipeline} shows the final design. Each demand access is pushed
+into a sliding window, and the window produces four local features. A local
+classifier proposes an expert. In two-core mode, shared snapshots record peer
+behavior and pressure. The coordinator then applies pair-aware rules before the
+candidate becomes the active expert. We use the name FDP for the FDP-style SPP
+expert in the selector; it is not a full reimplementation of the FDP paper, but
+an SPP variant with feedback-style controls intended to be safer under some
+traffic patterns. Overall, the simulated policy is relatively
+hardware-conscious: it relies on short counters, ratios, threshold comparisons,
+and a small shared state vector rather than expensive global history.
+
+\subsection*{OpenEvolve Setup}
+
+The original proposal planned a parameter-only OpenEvolve search over an SPP
+controller. During development, the retained artifact shifted to expert
+selection because it gave clearer control over heterogeneous pair behavior.
+For Phase 2, OpenEvolve searched only the coordinator logic. The expert
+prefetchers stayed fixed. The best retained point changed several pair
+fallbacks from \code{orig} to FDP, including dense-peer split handling,
+pair-scope BOP demotion, and \code{lbm}-like peer protection. It also added two
+runtime guards for sparse/high-page-growth cores paired with \code{lbm}-like
+peers, and for \code{lbm}-like cores paired with high-page-growth peers.
+
+For OpenEvolve, we constrained mutations to the pair-coordination decision path,
+primarily \code{coordinate\_candidate()}, and kept the expert prefetchers and
+ChampSim interfaces fixed. The prompt emphasized preserving the Phase 1
+selector behavior while improving fragile \code{lbm}-related pair cases. Each
+candidate was evaluated on a focused 2M-warmup plus 10M-simulation mini-suite
+containing single-core \code{lbm}, \code{bzip2 + lbm}, and \code{mcf + lbm}. The
+score combined mean gain with a worst-case guardrail so that a candidate had to
+improve pair behavior without introducing a new large regression. We retained
+the best candidate according to this focused score and report the broader final
+performance summary separately.
+
+\subsection*{Evaluation Setup}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Evaluation setup.}
+\label{tab:setup}
+\begin{tabularx}{\linewidth}{@{}p{0.22\linewidth}X@{}}
+\toprule
+Item & Setting \\
+\midrule
+Simulator & ChampSim trace-based simulation. \\
+Primary baseline & \code{SPP\_orig}; reported gains are relative to this baseline. \\
+Selector configs & \code{configs/adaptive\_selector\_config.json} and \code{configs/adaptive\_selector\_2core.json}. \\
+Experts & Original SPP, FDP-style SPP, and BOP. \\
+Workloads & \code{astar}, \code{mcf}, \code{lbm}, and \code{bzip2}. \\
+Metrics & Single-core IPC and two-core weighted speedup. \\
+Weighted-speedup definition & Sum of each core's shared-run IPC normalized to its corresponding single-core IPC; gains are relative to the \code{SPP\_orig} pair baseline. \\
+Final result source & Retained result ledger and associated scripts; the Phase 2 focused comparison uses the explicit short setting below. \\
+Phase 2 run length & 2M warmup plus 10M simulation for the focused OpenEvolve comparison. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section*{4. Experimental Results}
+
+\noindent\textbf{Phase 2 OpenEvolve best.}
+The Phase 2 OpenEvolve numbers are from a short focused mini-evaluation used to
+compare Phase 1 and Phase 2 coordinator variants. The retained single-core and
+two-core tables that follow report the final evaluation ledger. Thus,
+Table~\ref{tab:phase2} should be read as an optimization diagnostic, while
+Tables~\ref{tab:single}--\ref{tab:homo} are the final reported performance
+summary. Figure~\ref{fig:phase2gains} visualizes the before/after gains.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Phase 2 OpenEvolve best point, copied from the retained result ledger.}
+\label{tab:phase2}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Case & SPP base & Phase 1 & P1 gain & Phase 2 & P2 gain & Delta \\
+\midrule
+\code{lbm} IPC & 0.866441 & 0.869666 & \pct{+0.3722} & 0.869666 & \pct{+0.3722} & +0.0000 pp \\
+\code{bzip2 + lbm} WS & 1.792235 & 1.791723 & \pct{-0.0286} & 1.793705 & \pct{+0.0820} & +0.1106 pp \\
+\code{mcf + lbm} WS & 1.256300 & 1.243540 & \pct{-1.0157} & 1.249503 & \pct{-0.5410} & +0.4747 pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=0.68\linewidth,
+  height=3.55cm,
+  ymin=-1.15,
+  ymax=0.55,
+  bar width=7pt,
+  ylabel={Gain vs. SPP (\%)},
+  symbolic x coords={lbm,bzip2+lbm,mcf+lbm},
+  xtick=data,
+  x tick label style={font=\scriptsize, rotate=20, anchor=east},
+  legend style={font=\scriptsize, at={(0.5,1.02)}, anchor=south, legend columns=2},
+  ymajorgrids=true,
+  grid style={draw=gray!20}
+]
+\addplot[fill=bwcBlue!75, draw=bwcBlue] coordinates {(lbm,0.3722) (bzip2+lbm,-0.0286) (mcf+lbm,-1.0157)};
+\addplot[fill=bwcCoral!75, draw=bwcCoral] coordinates {(lbm,0.3722) (bzip2+lbm,0.0820) (mcf+lbm,-0.5410)};
+\legend{Phase 1, Phase 2}
+\end{axis}
+\end{tikzpicture}
+\caption{Phase 2 OpenEvolve before/after gains. OpenEvolve leaves single-core \code{lbm} unchanged, fixes the small \code{bzip2 + lbm} regression, and reduces the \code{mcf + lbm} loss.}
+\label{fig:phase2gains}
+\end{figure}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Phase 2 aggregate metrics.}
+\label{tab:phase2metrics}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Metric & Phase 1 source & Phase 2 best & Delta \\
+\midrule
+\code{combined\_score} & -6.2665 & -3.0105 & +3.2559 \\
+\code{mean\_gain\_pct} & \pct{-0.2240} & \pct{-0.0289} & +0.1951 pp \\
+\code{min\_gain\_pct} & \pct{-1.0157} & \pct{-0.5410} & +0.4747 pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+The aggregate score improves from -6.2665 to -3.0105, while mean gain and
+worst-case gain improve by 0.1951 and 0.4747 percentage points, respectively.
+
+\noindent\textbf{Retained single-core results.}
+The selector remains positive on every reported isolated workload, which was a
+necessary guardrail before trusting the two-core rules. Table~\ref{tab:single}
+reports the raw IPC values, while Figure~\ref{fig:single} shows the gain
+distribution.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Single-core IPC results.}
+\label{tab:single}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Workload & Baseline IPC & Current IPC & Gain \\
+\midrule
+\code{astar} & 0.116244 & 0.117697 & \pct{+1.2498} \\
+\code{mcf} & 0.093047 & 0.095530 & \pct{+2.6685} \\
+\code{lbm} & 0.870554 & 0.887491 & \pct{+1.9456} \\
+\code{bzip2} & 2.132624 & 2.150899 & \pct{+0.8569} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=0.78\linewidth,
+  height=3.7cm,
+  xmin=0,
+  xmax=3.0,
+  xlabel={IPC gain vs. SPP (\%)},
+  symbolic y coords={bzip2,lbm,mcf,astar},
+  ytick=data,
+  point meta=x,
+  nodes near coords={\pgfmathprintnumber[fixed, fixed zerofill, precision=2]{\pgfplotspointmeta}},
+  nodes near coords style={font=\scriptsize},
+  ymajorgrids=false,
+  xmajorgrids=true,
+  grid style={draw=gray!20}
+]
+\addplot[fill=bwcBlue!75, draw=bwcBlue] coordinates {(0.8569,bzip2) (1.9456,lbm) (2.6685,mcf) (1.2498,astar)};
+\end{axis}
+\end{tikzpicture}
+\caption{Single-core IPC gain. The selector preserves isolated behavior while enabling pair-aware control.}
+\label{fig:single}
+\end{figure}
+
+\noindent\textbf{Retained two-core results.}
+The retained pair set is also positive across all listed heterogeneous and
+homogeneous mixes. The \code{lbm} pairs are the main stress cases because their
+local prefetch behavior can become harmful when another core competes for
+shared resources. The smaller but positive gains on \code{bzip2 + lbm} and
+\code{mcf + lbm} suggest that the coordinator is most useful as a guardrail: it
+reduces harmful pair interactions while preserving positive final weighted
+speedup.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Two-core heterogeneous weighted-speedup results.}
+\label{tab:hetero}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Pair & Baseline WS & Current WS & Gain \\
+\midrule
+\code{mcf + astar} & 1.777787 & 1.824991 & \pct{+2.6552} \\
+\code{astar + bzip2} & 1.871024 & 1.899359 & \pct{+1.5144} \\
+\code{bzip2 + mcf} & 1.868884 & 1.894343 & \pct{+1.3623} \\
+\code{astar + lbm} & 1.356202 & 1.375121 & \pct{+1.3950} \\
+\code{bzip2 + lbm} & 1.938392 & 1.949615 & \pct{+0.5790} \\
+\code{mcf + lbm} & 1.282647 & 1.297473 & \pct{+1.1559} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=0.86\linewidth,
+  height=4.7cm,
+  xmin=0,
+  xmax=3.0,
+  xlabel={Weighted-speedup gain vs. SPP (\%)},
+  symbolic y coords={mcf+lbm,bzip2+lbm,astar+lbm,bzip2+mcf,astar+bzip2,mcf+astar},
+  ytick=data,
+  y tick label style={font=\scriptsize},
+  point meta=x,
+  nodes near coords={\pgfmathprintnumber[fixed, fixed zerofill, precision=2]{\pgfplotspointmeta}},
+  nodes near coords style={font=\scriptsize},
+  xmajorgrids=true,
+  grid style={draw=gray!20}
+]
+\addplot[fill=bwcCoral!72, draw=bwcCoral] coordinates {
+  (1.1559,mcf+lbm)
+  (0.5790,bzip2+lbm)
+  (1.3950,astar+lbm)
+  (1.3623,bzip2+mcf)
+  (1.5144,astar+bzip2)
+  (2.6552,mcf+astar)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Heterogeneous two-core gains. The \code{lbm} pairs are the most diagnostic cases for peer-aware protection.}
+\label{fig:hetero}
+\end{figure}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Two-core homogeneous weighted-speedup results.}
+\label{tab:homo}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Pair & Baseline WS & Current WS & Gain \\
+\midrule
+\code{astar + astar} & 1.598755 & 1.666130 & \pct{+4.2142} \\
+\code{mcf + mcf} & 1.703222 & 1.733555 & \pct{+1.7809} \\
+\code{lbm + lbm} & 1.054659 & 1.056457 & \pct{+0.1705} \\
+\code{bzip2 + bzip2} & 2.016283 & 2.017322 & \pct{+0.0515} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=0.78\linewidth,
+  height=3.8cm,
+  xmin=0,
+  xmax=4.8,
+  xlabel={Weighted-speedup gain vs. SPP (\%)},
+  symbolic y coords={bzip2+bzip2,lbm+lbm,mcf+mcf,astar+astar},
+  ytick=data,
+  y tick label style={font=\scriptsize},
+  point meta=x,
+  nodes near coords={\pgfmathprintnumber[fixed, fixed zerofill, precision=2]{\pgfplotspointmeta}},
+  nodes near coords style={font=\scriptsize},
+  xmajorgrids=true,
+  grid style={draw=gray!20}
+]
+\addplot[fill=bwcGold!80, draw=bwcGold] coordinates {
+  (0.0515,bzip2+bzip2)
+  (0.1705,lbm+lbm)
+  (1.7809,mcf+mcf)
+  (4.2142,astar+astar)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Homogeneous two-core gains. The selector's largest retained win is \code{astar + astar}; the \code{bzip2 + bzip2} result is close to neutral and should be read as preservation rather than a large speedup.}
+\label{fig:homo}
+\end{figure}
+
+\noindent\textbf{Experimental process.}
+The process was iterative. Intermediate rules were kept only when they improved
+a target pair without breaking previously retained single-core and pair
+behavior. Table~\ref{tab:commits} summarizes the commit progression behind that
+narrow final design.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Adaptive-selector commit progression.}
+\label{tab:commits}
+\begin{tabularx}{\linewidth}{@{}p{0.13\linewidth}p{0.22\linewidth}X@{}}
+\toprule
+Commit & Stage & Contribution \\
+\midrule
+\code{40deaeb4} & Sliding-window baseline & Introduced the adaptive selector and retained first single-core summaries. \\
+\code{2535efab} & Rule-2 selector & Reproduced direct expert matrices and tightened selector behavior. \\
+\code{051aaca8} & Pair-safe selector & Added shared coordination and retained \code{mcf + lbm} pair artifacts. \\
+\code{bc78d4bf} & Generalized pair state & Extended pair validation to \code{astar + lbm}, \code{bzip2 + lbm}, and \code{mcf + lbm}. \\
+\code{27258b89} & Final state retention & Consolidated the final adaptive-selector behavior in root results. \\
+\code{7a743462} & Phase 1 final & Finalized the retained Phase 1 selector source. \\
+\code{e65a5b4e} & Phase 2 OpenEvolve best & Recorded the coordinator-only OpenEvolve best point. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+This is why the final design is intentionally narrow: it preserves the useful
+local expert behavior and adds only enough peer-aware coordination to avoid the
+observed harmful interactions.
+
+\section*{5. Goals and Next Steps}
+
+The original proposal goal was an OpenEvolve-optimized bandwidth-aware SPP
+controller. We partially met that goal, but the final artifact shifted to a
+stronger adaptive-selector formulation. Instead of tuning a single SPP
+controller, we select among SPP, FDP-style SPP, and BOP. This better matches
+the observed problem: different workloads and pairs need different expert
+styles, not only different throttling thresholds. Although this shift changed
+the mechanism, it preserved the proposal's larger goal: using automated search
+to improve prefetch control under shared-resource pressure.
+
+Future work should evaluate more held-out SPEC mixes, run longer and repeated
+simulations, validate four-core behavior, and use OpenEvolve over a broader
+but still constrained coordinator rule space. The most useful next analysis is
+an ablation suite that disables one pair rule at a time and reports prefetch
+traffic, cache pollution, and queue pressure alongside IPC and weighted speedup.
+
+\section*{6. Collaboration}
+
+Zhaofeng Luo focused on experiment infrastructure, running ChampSim
+evaluations, collecting IPC and weighted-speedup summaries, and preparing the
+final result tables and poster figures. He also led the final report and poster
+writing, helped analyze the single-core and two-core results, and validated the
+retained result ledger.
+
+Kijun Shin focused on the adaptive-selector implementation, pair-coordination
+rules, and OpenEvolve-guided Phase 2 refinement. He also helped debug the
+coordinator behavior and interpret the evolved changes to
+\code{coordinate\_candidate()}.
+
+Both members jointly designed the BWC selector idea, studied related
+prefetching work, discussed evaluation methodology, reviewed intermediate
+results, and refined the final project narrative.
+
+\section*{7. Conclusion}
+
+The BWC Adaptive Selector demonstrates that prefetch control should not be
+purely local. The selector uses local stream features to choose an expert and
+peer/shared signals to decide whether that choice is safe for the memory
+system. The retained results show positive gains for every listed single-core
+workload and two-core pair in our reported suite. The Phase 2 OpenEvolve best
+point further shows that narrow, coordinator-only evolution can improve
+difficult \code{lbm} interactions without changing expert predictor internals.
+The central lesson is simple: the right prefetcher for one core is not always
+the right prefetcher for the system.
+
+\begin{thebibliography}{9}
+\bibitem{fdp}
+S. Srinath, O. Mutlu, H. Kim, and Y. N. Patt. Feedback Directed Prefetching:
+Improving the Performance and Bandwidth-Efficiency of Hardware Prefetchers.
+HPCA, 2007. \url{https://hps.ece.utexas.edu/pub/srinath_hpca07.pdf}
+
+\bibitem{spp}
+J. Kim, S. H. Pugsley, P. V. Gratz, A. L. N. Reddy, C. Wilkerson, and
+Z. Chishti. Path Confidence Based Lookahead Prefetching. MICRO, 2016.
+\url{https://dblp.org/rec/conf/micro/KimPGRWC16.html}
+
+\bibitem{bop}
+P. Michaud. Best-Offset Hardware Prefetching. HPCA, 2016.
+\url{https://core.ac.uk/outputs/48160133/}
+
+\bibitem{champsim}
+N. Gober, G. Chacon, L. Wang, P. V. Gratz, D. A. Jimenez, E. Teran,
+S. H. Pugsley, and J. Kim. The Championship Simulator: Architectural Simulation
+for Education and Competition. arXiv:2210.14324, 2022.
+\url{https://arxiv.org/abs/2210.14324}
+
+\bibitem{openevolve}
+OpenEvolve project repository.
+\url{https://github.com/algorithmicsuperintelligence/openevolve}
+Accessed April 2026.
+\end{thebibliography}
+
+\end{document}
