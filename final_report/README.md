@@ -3,14 +3,14 @@
 This directory contains the submission-ready final project report for the
 15-740 ChampSim project.
 
-- `report.tex`: primary LaTeX source with figures and tables.
+- `report.tex`: primary LaTeX source with compact scale-sweep figures and tables.
 - `report.pdf`: compiled submission PDF, when generated locally.
-- `report.md`: earlier Markdown draft kept as a reference.
+- `report.md`: detailed Markdown reference with the full scale-sweep result tables.
 
 The LaTeX report is based on the current result ledger in the repository root
 (`report.md`), the final adaptive selector implementation, the Phase 2
-OpenEvolve best-point source, poster data, and the adaptive-selector commit
-history.
+OpenEvolve best-point source, poster data, the Phase 1 scale sweep, and the
+adaptive-selector commit history.
 
 Primary source artifacts:
 
@@ -25,5 +25,7 @@ Assumptions used in the report:
 
 - Language: English.
 - Package location: `final_report/`.
+- Main result framing: Phase 1 final scale sweep is the primary result; Phase 2
+  OpenEvolve is a focused 2M+10M diagnostic.
 - Collaboration statement: individual contributions are recorded, including
   Zhaofeng Luo leading the final report and poster writing.
